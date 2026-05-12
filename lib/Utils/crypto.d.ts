@@ -31,7 +31,7 @@ export declare function aesDecrypt(buffer: Uint8Array, key: Uint8Array): Buffer<
 export declare function aesDecryptWithIV(buffer: Uint8Array, key: Uint8Array, IV: Uint8Array): Buffer<ArrayBuffer>;
 export declare function aesEncrypt(buffer: Uint8Array, key: Uint8Array): Buffer<ArrayBuffer>;
 export declare function aesEncrypWithIV(buffer: Buffer, key: Buffer, IV: Buffer): Buffer<ArrayBuffer>;
-export declare function hmacSign(buffer: Buffer | Uint8Array, key: Buffer | Uint8Array, variant?: 'sha256' | 'sha512'): Buffer<ArrayBufferLike>;
-export declare function sha256(buffer: Buffer): Buffer<ArrayBufferLike>;
+export declare function hmacSign(buffer: Buffer | Uint8Array, key: Buffer | Uint8Array, variant?: 'sha256' | 'sha512'): NonSharedBuffer;
+export declare function sha256(buffer: Buffer): NonSharedBuffer;
 export declare function derivePairingCodeKey(pairingCode: string, salt: Buffer): Promise<Buffer>;
 //# sourceMappingURL=crypto.d.ts.map
