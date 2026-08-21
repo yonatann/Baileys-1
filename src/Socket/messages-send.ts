@@ -312,7 +312,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			}
 		}
 
-		const query = new USyncQuery().withContext('message').withDeviceProtocol().withLIDProtocol()
+		const query = new USyncQuery().withContext('interactive').withDeviceProtocol().withLIDProtocol()
 
 		for (const jid of toFetch) {
 			query.withUser(new USyncUser().withId(jid)) // todo: investigate - the idea here is that <user> should have an inline lid field with the lid being the pn equivalent
@@ -749,7 +749,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				if (isGroup) {
 					additionalAttributes = {
 						...additionalAttributes,
-						addressing_mode: groupData?.addressingMode || 'lid'
+						addressing_mode: groupData?.addressingMode || 'pn'
 					}
 				}
 
@@ -760,7 +760,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 				const bytes = encodeWAMessage(patched)
 				reportingMessage = patched
-				const groupAddressingMode = additionalAttributes?.['addressing_mode'] || groupData?.addressingMode || 'lid'
+				const groupAddressingMode = additionalAttributes?.['addressing_mode'] || groupData?.addressingMode || 'pn'
 				const groupSenderIdentity = groupAddressingMode === 'lid' && meLid ? meLid : meId
 
 				const { ciphertext, senderKeyDistributionMessage } = await signalRepository.encryptGroupMessage({
