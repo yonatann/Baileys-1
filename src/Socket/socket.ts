@@ -442,7 +442,14 @@ export const makeSocket = (config: SocketConfig) => {
 		const keyEnc = noise.processHandshake(handshake, creds.noiseKey)
 
 		let node: proto.IClientPayload
-		if (!creds.me) {
+		// Gate LOGIN on a COMPLETED registration, not merely on `creds.me` being set.
+		// requestPairingCode (link-with-phone-number) sets `creds.me = jidEncode(phoneNumber)`
+		// up front, while `creds.registered` stays false until the code is entered and pairing
+		// completes. With the old `!creds.me` gate, the reconnect after a pairing window expires
+		// took the LOGIN branch (generateLoginNode with an unregistered me.id) → WhatsApp replied
+		// `<failure reason=401>` (never registered) → clearAuth/self-heal loop, so the entered code
+		// never landed. Registering while unregistered keeps the pairing window alive cleanly.
+		if (!creds.me || !creds.registered) {
 			node = generateRegistrationNode(creds, config)
 			logger.info({ node }, 'not logged in, attempting registration...')
 		} else {
