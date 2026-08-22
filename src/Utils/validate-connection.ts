@@ -22,9 +22,14 @@ const getUserAgent = (config: SocketConfig): proto.ClientPayload.IUserAgent => {
 		},
 		platform: proto.ClientPayload.UserAgent.Platform.WEB,
 		releaseChannel: proto.ClientPayload.UserAgent.ReleaseChannel.RELEASE,
-		osVersion: '0.1',
+		// WA Web parity: the login ClientPayload never carries the impossible '0.1' OS
+		// version. Real WA Web sets osVersion from the OS release and sends osBuildNumber
+		// as a real build or null. '0.1' on every login is a hard, persistent fingerprint.
+		// Use the OS version the client already declares in `browser` ([os, browser, version]
+		// — e.g. macOS '10.15.7'); send a null build like WA Web does when none is available.
+		osVersion: config.browser?.[2] || '10.15.7',
 		device: 'Desktop',
-		osBuildNumber: '0.1',
+		osBuildNumber: null,
 		localeLanguageIso6391: 'en',
 
 		mnc: '000',
