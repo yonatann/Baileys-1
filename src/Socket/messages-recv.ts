@@ -1165,7 +1165,19 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				const identitySharedKey = Curve.sharedKey(authState.creds.signedIdentityKey.private, primaryIdentityPublicKey)
 				const identityPayload = Buffer.concat([companionSharedKey, identitySharedKey, random])
 				authState.creds.advSecretKey = Buffer.from(hkdf(identityPayload, 32, { info: 'adv_secret' })).toString('base64')
-				await query({
+				// Mark the device REGISTERED and persist it BEFORE sending, then fire-and-forget the
+				// companion_finish with sendNode (NOT query). WhatsApp answers companion_finish with a
+				// `pair-success` stanza + a `515 restart required`, NOT a matching <iq> result — so the
+				// old `await query(...)` (which blocks waiting for that result) TIMED OUT
+				// ("timed out waiting for message"), and the `creds.registered = true` line after it
+				// never ran. The post-515 reconnect then saw registered=false, took the REGISTRATION
+				// branch (login-gate `!me || !registered`), and WhatsApp rejected re-registering an
+				// already-linked device → the user saw "couldn't link device". Setting registered
+				// up front (mirrors the QR pair-success handler, which uses sendNode + sets creds
+				// synchronously) makes link-code completion robust regardless of the IQ-result gap.
+				authState.creds.registered = true
+				ev.emit('creds.update', authState.creds)
+				await sendNode({
 					tag: 'iq',
 					attrs: {
 						to: S_WHATSAPP_NET,
@@ -1200,8 +1212,6 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						}
 					]
 				})
-				authState.creds.registered = true
-				ev.emit('creds.update', authState.creds)
 				break
 			case 'privacy_token':
 				await handlePrivacyTokenNotification(node)
