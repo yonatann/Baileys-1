@@ -236,7 +236,13 @@ export const configureSuccessfulPairing = (
 		account,
 		me: { id: jid!, name: bizName, lid },
 		signalIdentities: [...(signalIdentities || []), identity],
-		platform: platformNode?.attrs.name
+		platform: platformNode?.attrs.name,
+		// QR pairing completes HERE — mark the device registered so the connect-node selector
+		// (`if (!creds.me || !creds.registered)`) takes the LOGIN branch on the post-pair 515
+		// reconnect instead of re-registering an already-linked device (which loops back to QR).
+		// Symmetric with the link-code path, which sets `creds.registered = true` at companion_finish
+		// (Socket/messages-recv). Without this, the registration-gate fix broke QR pairing entirely.
+		registered: true
 	}
 
 	return {
