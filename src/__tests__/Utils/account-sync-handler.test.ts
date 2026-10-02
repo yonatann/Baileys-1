@@ -69,6 +69,47 @@ describe('account_sync device-list reconcile — extractor (D1 / BE#661)', () =>
 		})
 		expect(r.action).toBe('skipped_no_me')
 	})
+
+	// R3-1: ownDevicePresent must match our device across BOTH the PN and LID user forms.
+	it('flags ownDevicePresent=true for a LID-form pushed list carrying our LID device', () => {
+		const node = accountSyncNode(devicesChild(['99887766:0@lid', '99887766:3@lid']))
+		const r = extractAccountSyncDeviceSync(node, { meId: ME_ID, meLid: ME_LID })
+		expect(r.action === 'reconcile' && r.ownDevicePresent).toBe(true)
+	})
+
+	it('flags ownDevicePresent=false for a LID-form list missing our LID device', () => {
+		const node = accountSyncNode(devicesChild(['99887766:0@lid', '99887766:9@lid']))
+		const r = extractAccountSyncDeviceSync(node, { meId: ME_ID, meLid: ME_LID })
+		expect(r.action === 'reconcile' && r.ownDevicePresent).toBe(false)
+	})
+
+	// R3-1: only reconcile when the push is for OUR account (WA Web isMeAccount(from)).
+	it('skips a push whose from is NOT our account', () => {
+		const node: BinaryNode = {
+			tag: 'notification',
+			attrs: { type: 'account_sync', from: '447700900000@s.whatsapp.net' },
+			content: [devicesChild(['447700900000:0@s.whatsapp.net'])]
+		}
+		expect(extractAccountSyncDeviceSync(node, { meId: ME_ID, meLid: ME_LID }).action).toBe('skipped_not_me')
+	})
+
+	it('reconciles when from is our LID account', () => {
+		const node: BinaryNode = {
+			tag: 'notification',
+			attrs: { type: 'account_sync', from: ME_LID },
+			content: [devicesChild(['99887766:3@lid'])]
+		}
+		expect(extractAccountSyncDeviceSync(node, { meId: ME_ID, meLid: ME_LID }).action).toBe('reconcile')
+	})
+
+	it('reconciles when from is absent (server-omitted)', () => {
+		const node: BinaryNode = {
+			tag: 'notification',
+			attrs: { type: 'account_sync' },
+			content: [devicesChild(['15551230000:3@s.whatsapp.net'])]
+		}
+		expect(extractAccountSyncDeviceSync(node, { meId: ME_ID, meLid: ME_LID }).action).toBe('reconcile')
+	})
 })
 
 describe('account_sync device-list reconcile — orchestrator (D1 / BE#661, B1+B2)', () => {

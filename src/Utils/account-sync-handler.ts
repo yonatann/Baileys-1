@@ -1,4 +1,4 @@
-import { type BinaryNode, getBinaryNodeChild, getBinaryNodeChildren, jidDecode } from '../WABinary'
+import { areJidsSameUser, type BinaryNode, getBinaryNodeChild, getBinaryNodeChildren, jidDecode } from '../WABinary'
 import type { ILogger } from './logger'
 
 export type AccountSyncReconcileResult = {
@@ -22,6 +22,8 @@ export type AccountSyncDeviceSyncResult =
 	| { action: 'no_device_child' }
 	/** A device-list child is present but we have no own-user id to reconcile against. */
 	| { action: 'skipped_no_me' }
+	/** The push's `from` is present and is NOT our own account (WA Web isMeAccount gate). */
+	| { action: 'skipped_not_me' }
 	| AccountSyncReconcileResult
 
 export type AccountSyncContext = {
@@ -52,6 +54,13 @@ export function extractAccountSyncDeviceSync(node: BinaryNode, ctx: AccountSyncC
 		return { action: 'skipped_no_me' }
 	}
 
+	// WA Web isMeAccount(from): only reconcile a push that is for OUR account. A `from` that is
+	// present and matches neither our PN nor LID account is not ours — skip. Absent `from` = ours.
+	const from = node.attrs.from
+	if (from && !areJidsSameUser(from, ctx.meId) && !(ctx.meLid && areJidsSameUser(from, ctx.meLid))) {
+		return { action: 'skipped_not_me' }
+	}
+
 	const ownUser = ownDecoded.user
 	const ownDevice = ownDecoded.device ?? 0
 	const ownLidUser = ctx.meLid ? jidDecode(ctx.meLid)?.user : undefined
@@ -60,9 +69,15 @@ export function extractAccountSyncDeviceSync(node: BinaryNode, ctx: AccountSyncC
 		.map(d => d.attrs.jid)
 		.filter((jid): jid is string => !!jid)
 
+	// R3-1: our own device can appear under the PN OR the LID user form. Match the device id
+	// against either (WA Web keys the own-device check on the device id, not a single user form).
 	const ownDevicePresent = deviceJids.some(jid => {
 		const d = jidDecode(jid)
-		return d?.user === ownUser && (d?.device ?? 0) === ownDevice
+		if ((d?.device ?? 0) !== ownDevice) {
+			return false
+		}
+
+		return d?.user === ownUser || (!!ownLidUser && d?.user === ownLidUser)
 	})
 
 	return {
