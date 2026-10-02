@@ -43,6 +43,8 @@ import {
 	getStatusFromReceiptType,
 	collectServerSyncCollectionNames,
 	extractAccountSyncDeviceSync,
+	reconcileOwnDevicesOnAccountSync,
+	isStringNullOrEmpty,
 	handleIdentityChange,
 	hkdf,
 	MISSING_KEYS_ERROR_TEXT,
@@ -1107,27 +1109,24 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 				break
 			case 'account_sync':
-				// WA Web parity (D1 / BE#661): an account_sync device-list push must trigger a USync
-				// reconcile of the account's OWN device list (doPendingDeviceSync), not be ignored.
+				// WA Web parity (D1 / BE#661): apply an account_sync device-list push to the account's
+				// OWN device list (WAWebHandleAccountSyncNotification). Drop the cached own-device entries
+				// (PN + LID) so they refetch; USync only when the push carried no list (context notification).
 				const accountSyncDeviceSync = extractAccountSyncDeviceSync(node, {
 					meId: authState.creds.me?.id,
 					meLid: authState.creds.me?.lid
 				})
 				if (accountSyncDeviceSync.action === 'reconcile') {
-					logger.info(
-						{
-							parity: 'd1',
-							ownUser: accountSyncDeviceSync.ownUser,
-							deviceCount: accountSyncDeviceSync.deviceJids.length
-						},
-						'[waweb-parity][d1] account_sync device-list push → USync reconcile of own devices'
-					)
 					try {
-						await devicesMutex.mutex(async () => {
-							await userDevicesCache?.del(accountSyncDeviceSync.ownUser)
-							// useCache=false forces a fresh USync fetch; getUSyncDevices repopulates
-							// userDevicesCache and persists the device-list, matching WA Web's reconcile.
-							await getUSyncDevices([authState.creds.me!.id], false, false)
+						await reconcileOwnDevicesOnAccountSync(accountSyncDeviceSync, {
+							// bare user jid — me.id carries a device suffix that makes getUSyncDevices a no-op (B1)
+							meIdNormalized: jidNormalizedUser(authState.creds.me!.id),
+							offline: !isStringNullOrEmpty(node.attrs.offline),
+							delCachedUser: user => userDevicesCache?.del(user),
+							// lock only the cache mutation; getUSyncDevices re-takes devicesMutex (B2) so it runs outside
+							withDevicesLock: fn => devicesMutex.mutex(fn),
+							getUSyncDevices,
+							logger
 						})
 					} catch (error) {
 						logger.warn(

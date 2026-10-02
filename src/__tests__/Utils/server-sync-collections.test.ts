@@ -38,6 +38,18 @@ describe('server_sync collection extraction (D2 / BE#662)', () => {
 		expect(collectServerSyncCollectionNames(node)).toEqual(['critical_block', 'regular'])
 	})
 
+	it('filters out unknown collection names not in ALL_WA_PATCH_NAMES', () => {
+		// WA Web drops names that fail CollectionName.cast; an unknown name left in the
+		// resync list makes resyncAppState loop forever (the server omits it from the response).
+		const node = serverSyncNode(['critical_block', 'bogus_collection', 'regular'])
+		expect(collectServerSyncCollectionNames(node)).toEqual(['critical_block', 'regular'])
+	})
+
+	it('returns empty when every collection name is unknown', () => {
+		const node = serverSyncNode(['nope', 'also_nope'])
+		expect(collectServerSyncCollectionNames(node)).toEqual([])
+	})
+
 	it('skips collection children with a missing name attr', () => {
 		const node: BinaryNode = {
 			tag: 'notification',

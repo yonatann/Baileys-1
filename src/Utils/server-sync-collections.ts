@@ -1,5 +1,7 @@
-import { type WAPatchName } from '../Types'
+import { ALL_WA_PATCH_NAMES, type WAPatchName } from '../Types'
 import { type BinaryNode, getBinaryNodeChildren } from '../WABinary'
+
+const VALID_PATCH_NAMES = new Set<string>(ALL_WA_PATCH_NAMES)
 
 /**
  * WA Web parity (D2 / BE#662): a `server_sync` notification can carry MULTIPLE
@@ -18,7 +20,9 @@ export function collectServerSyncCollectionNames(node: BinaryNode): WAPatchName[
 	const names: WAPatchName[] = []
 	for (const collection of getBinaryNodeChildren(node, 'collection')) {
 		const name = collection.attrs.name
-		if (!name || seen.has(name)) {
+		// Drop unknown names (WA Web's CollectionName.cast): an unknown collection left in the
+		// resync list is never returned by the server, so resyncAppState would re-query forever.
+		if (!name || seen.has(name) || !VALID_PATCH_NAMES.has(name)) {
 			continue
 		}
 
