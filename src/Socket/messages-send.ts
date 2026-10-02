@@ -33,6 +33,8 @@ import {
 	MessageRetryManager,
 	normalizeMessageContent,
 	parseAndInjectE2ESessions,
+	selectLidsForForceRefetch,
+	DEFAULT_LID_REFETCH_THROTTLE_SEC,
 	unixTimestampSeconds
 } from '../Utils'
 import { getUrlInfo } from '../Utils/link-preview'
@@ -113,6 +115,16 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		})
 	/** Serializes writes to userDevicesCache across USync refresh and device-notification handling. */
 	const devicesMutex = makeMutex()
+
+	/**
+	 * Per-LID cooldown for the identity force-refetch on newly-mapped LIDs (D3 / BE#660).
+	 * Throttles repeated `assertSessions(lids, true)` for the same LID during LID-mapping churn
+	 * to avoid an identity-fetch storm that WhatsApp rate-limits.
+	 */
+	const lidForceRefetchThrottle = new NodeCache<boolean>({
+		stdTTL: DEFAULT_LID_REFETCH_THROTTLE_SEC,
+		useClones: false
+	})
 
 	// Initialize message retry manager if enabled
 	const messageRetryManager = enableRecentMessageCache ? new MessageRetryManager(logger, maxMsgRetryCount) : null
@@ -327,11 +339,25 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				logger.trace('Storing LID maps from device call')
 				await signalRepository.lidMapping.storeLIDPNMappings(lidResults.map(a => ({ lid: a.lid as string, pn: a.id })))
 
-				// Force-refresh sessions for newly mapped LIDs to align identity addressing
+				// Force-refresh sessions for newly mapped LIDs to align identity addressing.
+				// WA Web parity (D3 / BE#660): throttle per-LID so repeated LID-mapping churn
+				// does not trigger an unbounded identity-fetch storm (reason='identity' IQs).
 				try {
 					const lids = lidResults.map(a => a.lid as string)
-					if (lids.length) {
-						await assertSessions(lids, true)
+					const { toRefetch, throttled } = selectLidsForForceRefetch(lids, lidForceRefetchThrottle)
+					if (throttled.length) {
+						logger.debug(
+							{ parity: 'd3', throttled: throttled.length },
+							'[waweb-parity][d3] identity force-refetch throttled for recently-refetched LIDs'
+						)
+					}
+
+					if (toRefetch.length) {
+						logger.info(
+							{ parity: 'd3', refetch: toRefetch.length, throttled: throttled.length },
+							'[waweb-parity][d3] identity force-refetch for newly mapped LIDs'
+						)
+						await assertSessions(toRefetch, true)
 					}
 				} catch (e) {
 					logger.warn({ e, count: lidResults.length }, 'failed to assert sessions for newly mapped LIDs')
@@ -1272,6 +1298,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		if (!config.userDevicesCache && userDevicesCache.close) {
 			userDevicesCache.close()
 		}
+
+		lidForceRefetchThrottle.close?.()
 
 		mediaConn = undefined
 		if (messageRetryManager) {

@@ -19,8 +19,7 @@ import type {
 	SocketConfig,
 	WACallEvent,
 	WAMessage,
-	WAMessageKey,
-	WAPatchName
+	WAMessageKey
 } from '../Types'
 import { ReachoutTimelockEnforcementType, WAMessageStatus, WAMessageStubType } from '../Types'
 import {
@@ -42,6 +41,8 @@ import {
 	getHistoryMsg,
 	getNextPreKeys,
 	getStatusFromReceiptType,
+	collectServerSyncCollectionNames,
+	extractAccountSyncDeviceSync,
 	handleIdentityChange,
 	hkdf,
 	MISSING_KEYS_ERROR_TEXT,
@@ -131,6 +132,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		sendReceipt,
 		uploadPreKeys,
 		sendPeerDataOperationMessage,
+		getUSyncDevices,
 		messageRetryManager,
 		registerSocketEndHandler,
 		issuePrivacyTokens,
@@ -1065,10 +1067,14 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 				break
 			case 'server_sync':
-				const update = getBinaryNodeChild(node, 'collection')
-				if (update) {
-					const name = update.attrs.name as WAPatchName
-					await resyncAppState([name], false)
+				// WA Web parity (D2 / BE#662): resync ALL collections, not just the first.
+				const serverSyncCollections = collectServerSyncCollectionNames(node)
+				if (serverSyncCollections.length) {
+					logger.info(
+						{ parity: 'd2', count: serverSyncCollections.length, collections: serverSyncCollections },
+						'[waweb-parity][d2] server_sync resync collections'
+					)
+					await resyncAppState(serverSyncCollections, false)
 				}
 
 				break
@@ -1101,6 +1107,38 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 				break
 			case 'account_sync':
+				// WA Web parity (D1 / BE#661): an account_sync device-list push must trigger a USync
+				// reconcile of the account's OWN device list (doPendingDeviceSync), not be ignored.
+				const accountSyncDeviceSync = extractAccountSyncDeviceSync(node, {
+					meId: authState.creds.me?.id,
+					meLid: authState.creds.me?.lid
+				})
+				if (accountSyncDeviceSync.action === 'reconcile') {
+					logger.info(
+						{
+							parity: 'd1',
+							ownUser: accountSyncDeviceSync.ownUser,
+							deviceCount: accountSyncDeviceSync.deviceJids.length
+						},
+						'[waweb-parity][d1] account_sync device-list push → USync reconcile of own devices'
+					)
+					try {
+						await devicesMutex.mutex(async () => {
+							await userDevicesCache?.del(accountSyncDeviceSync.ownUser)
+							// useCache=false forces a fresh USync fetch; getUSyncDevices repopulates
+							// userDevicesCache and persists the device-list, matching WA Web's reconcile.
+							await getUSyncDevices([authState.creds.me!.id], false, false)
+						})
+					} catch (error) {
+						logger.warn(
+							{ parity: 'd1', error },
+							'[waweb-parity][d1] failed to reconcile own devices after account_sync'
+						)
+					}
+
+					break
+				}
+
 				if (child!.tag === 'disappearing_mode') {
 					const newDuration = +child!.attrs.duration!
 					const timestamp = +child!.attrs.t!
