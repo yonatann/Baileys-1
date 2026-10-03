@@ -4,6 +4,8 @@ import { AbstractSocketClient } from './types'
 
 export class WebSocketClient extends AbstractSocketClient {
 	protected socket: WebSocket | null = null
+	/** BE#689: result of the most recent close() — lets the consumer read the flush after end() (null = never closed). */
+	lastCloseFlushed: boolean | null = null
 
 	get isOpen(): boolean {
 		return this.socket?.readyState === WebSocket.OPEN
@@ -49,11 +51,22 @@ export class WebSocketClient extends AbstractSocketClient {
 	 */
 	async close(timeoutMs = 0): Promise<boolean> {
 		if (!this.socket) {
+			this.lastCloseFlushed = true
+			return true
+		}
+
+		// BE#689 M4: if the socket is already CLOSED, `close()` emits no further `close` event, so
+		// arming a wait would just burn the full timeout and report a false "abrupt drop". Return now.
+		if (this.socket.readyState === WebSocket.CLOSED) {
+			this.socket = null
+			this.lastCloseFlushed = true
 			return true
 		}
 
 		const closed = new Promise<boolean>(resolve => {
-			this.socket?.once('close', () => resolve(true))
+			// BE#689 M2: ws emits `close` even on an abnormal teardown (reset/FIN with no close frame)
+			// with code 1006 — the exact abrupt-spot-drop case. Treat ONLY a non-1006 close as flushed.
+			this.socket?.once('close', (code: number) => resolve(code !== 1006))
 		})
 
 		this.socket.close()
@@ -73,6 +86,7 @@ export class WebSocketClient extends AbstractSocketClient {
 		}
 
 		this.socket = null
+		this.lastCloseFlushed = flushed
 		return flushed
 	}
 	send(str: string | Uint8Array, cb?: (err?: Error) => void): boolean {

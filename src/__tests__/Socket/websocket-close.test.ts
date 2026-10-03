@@ -32,4 +32,27 @@ describe('WebSocketClient.close(timeoutMs) — bounded graceful close (BE#689)',
 	it('returns true immediately when there is no socket', async () => {
 		await expect(makeClient(null).close(1000)).resolves.toBe(true)
 	})
+
+	it('returns FALSE when the close event carries code 1006 (abnormal/no close frame)', async () => {
+		const ee = new EventEmitter() as EventEmitter & { readyState: number; close: () => void }
+		ee.readyState = 1
+		ee.close = () => setImmediate(() => ee.emit('close', 1006))
+		await expect(makeClient(ee).close(1000)).resolves.toBe(false)
+	})
+
+	it('returns TRUE for a clean close code (1000/1001)', async () => {
+		const ee = new EventEmitter() as EventEmitter & { readyState: number; close: () => void }
+		ee.readyState = 1
+		ee.close = () => setImmediate(() => ee.emit('close', 1000))
+		await expect(makeClient(ee).close(1000)).resolves.toBe(true)
+	})
+
+	it('returns immediately (no timeout wait) when the socket is already CLOSED', async () => {
+		const ee = new EventEmitter() as EventEmitter & { readyState: number; close: () => void }
+		ee.readyState = 3 // WebSocket.CLOSED — never emits a new close event
+		ee.close = () => undefined
+		const start = Date.now()
+		await expect(makeClient(ee).close(5000)).resolves.toBe(true)
+		expect(Date.now() - start).toBeLessThan(500) // did not burn the 5s timeout
+	})
 })

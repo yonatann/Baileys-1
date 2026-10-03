@@ -32,6 +32,7 @@ import {
 	Curve,
 	derivePairingCodeKey,
 	generateLoginNode,
+	nextLoginCounter,
 	generateMdTagPrefix,
 	generateRegistrationNode,
 	getCodeFromWSError,
@@ -734,18 +735,6 @@ export const makeSocket = (config: SocketConfig) => {
 				logger.warn('keep alive called when WS not open')
 			}
 		}, keepAliveIntervalMs))
-	/** i have no idea why this exists. pls enlighten me */
-	const sendPassiveIq = (tag: 'passive' | 'active') =>
-		query({
-			tag: 'iq',
-			attrs: {
-				to: S_WHATSAPP_NET,
-				xmlns: 'passive',
-				type: 'set'
-			},
-			content: [{ tag, attrs: {} }]
-		})
-
 	/** logout & invalidate connection */
 	const logout = async (msg?: string) => {
 		const jid = authState.creds.me?.id
@@ -951,7 +940,9 @@ export const makeSocket = (config: SocketConfig) => {
 		try {
 			updateServerTimeOffset(node)
 			await uploadPreKeysToServerIfRequired()
-			await sendPassiveIq('active')
+			// BE#687 M1: WA Web sends <active/> ONLY after a passive connect (to end passive mode
+			// once a receipt/message backlog is flushed). We connect passive:false, so an unconditional
+			// <active/> is a passive:false+<active/> combination WA Web never produces — drop it.
 
 			// After successful login, validate our key-bundle against server
 			try {
@@ -969,7 +960,7 @@ export const makeSocket = (config: SocketConfig) => {
 		// WA Web parity (BE#687): increment the persistent login counter on each successful stream
 		// open (WA Web's incrementLoginCounter in onOpenSocketStream). Persisted via creds.update →
 		// saved to the PVC auth-state, so it survives pod restarts and the next login presents it.
-		const registeredLoginCount = (authState.creds.registeredLoginCount || 0) + 1
+		const registeredLoginCount = nextLoginCounter(authState.creds.registeredLoginCount || 0)
 
 		ev.emit('creds.update', {
 			me: { ...authState.creds.me!, lid: node.attrs.lid },

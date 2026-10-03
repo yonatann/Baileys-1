@@ -75,9 +75,11 @@ export const generateLoginNode = (
 	const { user, device } = jidDecode(userJid)!
 	const payload: proto.IClientPayload = {
 		...getClientPayload(config),
-		// WA Web parity (BE#687): a sole/primary connection (our headless gateway is the account's
-		// only device) connects ACTIVE. WA Web resets passive=false after every successful connect;
-		// persistently announcing passive=true marked us as a secondary companion.
+		// WA Web parity (BE#687): `passive` is WA Web's default (false) when no passive tasks are
+		// pending — it is NOT a primary-vs-companion flag (we are a linked companion, device != 0,
+		// like WA Web itself). WA Web only connects passive:true transiently to flush a receipt/message
+		// backlog, then sends <active/>. We have no such backlog path, so we connect active (false)
+		// and (per M1) do NOT send the follow-up <active/> IQ.
 		passive: false,
 		pull: true,
 		username: +user,
@@ -92,6 +94,12 @@ export const generateLoginNode = (
 	}
 	return proto.ClientPayload.fromObject(payload)
 }
+
+/**
+ * WA Web parity (BE#687): next value of the persisted login counter (`lc`). WA Web's
+ * `incrementLoginCounter` wraps at int32 max back to 0 (`e >= 2^31-1 ? 0 : e+1`).
+ */
+export const nextLoginCounter = (current: number): number => (current >= 2147483647 ? 0 : current + 1)
 
 const getPlatformType = (platform: string): proto.DeviceProps.PlatformType => {
 	const platformType = platform.toUpperCase()
