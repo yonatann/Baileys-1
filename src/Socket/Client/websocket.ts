@@ -40,20 +40,40 @@ export class WebSocketClient extends AbstractSocketClient {
 		}
 	}
 
-	async close() {
+	/**
+	 * Close the socket. Returns whether the close actually completed (the WS `close` event fired) =
+	 * "flushed". When `timeoutMs > 0` the wait is BOUNDED (BE#689): on an abrupt spot-node network
+	 * teardown the `close` event may never arrive, so an unbounded await could hang the whole
+	 * shutdown and never confirm the flush. A timed-out close resolves `false` so the caller can
+	 * record that WhatsApp likely saw an abrupt drop rather than a clean close.
+	 */
+	async close(timeoutMs = 0): Promise<boolean> {
 		if (!this.socket) {
-			return
+			return true
 		}
 
-		const closePromise = new Promise<void>(resolve => {
-			this.socket?.once('close', resolve)
+		const closed = new Promise<boolean>(resolve => {
+			this.socket?.once('close', () => resolve(true))
 		})
 
 		this.socket.close()
 
-		await closePromise
+		let flushed: boolean
+		if (timeoutMs > 0) {
+			let timer: ReturnType<typeof setTimeout> | undefined
+			const timedOut = new Promise<boolean>(resolve => {
+				timer = setTimeout(() => resolve(false), timeoutMs)
+			})
+			flushed = await Promise.race([closed, timedOut])
+			if (timer) {
+				clearTimeout(timer)
+			}
+		} else {
+			flushed = await closed
+		}
 
 		this.socket = null
+		return flushed
 	}
 	send(str: string | Uint8Array, cb?: (err?: Error) => void): boolean {
 		this.socket?.send(str, cb)

@@ -17,6 +17,7 @@ export abstract class AbstractSocketClient extends EventEmitter {
 	}
 
 	abstract connect(): void
-	abstract close(): void
+	/** Close the socket; resolves whether it flushed (close completed) within `timeoutMs` (0 = unbounded). */
+	abstract close(timeoutMs?: number): Promise<boolean>
 	abstract send(str: Uint8Array | string, cb?: (err?: Error) => void): boolean
 }

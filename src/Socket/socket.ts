@@ -645,8 +645,19 @@ export const makeSocket = (config: SocketConfig) => {
 
 		if (!ws.isClosed && !ws.isClosing) {
 			try {
-				await ws.close()
-			} catch {}
+				// BE#689: bounded graceful close (4s, well under the 25s spot grace). Logs whether the
+				// close actually flushed — a timed-out close means WhatsApp likely saw an abrupt drop,
+				// the suspected "abrupt-drop → new-IP reconnect = takeover → device_removed" path.
+				const flushed = await ws.close(4000)
+				logger.info(
+					{ flushed, reason: error ? 'error' : 'close' },
+					flushed
+						? 'websocket closed cleanly — flushed'
+						: 'websocket close TIMED OUT — not flushed (abrupt drop)'
+				)
+			} catch (e) {
+				logger.warn({ e }, 'error closing websocket')
+			}
 		}
 
 		for (const handler of socketEndHandlers) {
