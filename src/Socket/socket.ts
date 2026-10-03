@@ -453,7 +453,7 @@ export const makeSocket = (config: SocketConfig) => {
 			node = generateRegistrationNode(creds, config)
 			logger.info({ node }, 'not logged in, attempting registration...')
 		} else {
-			node = generateLoginNode(creds.me.id, config)
+			node = generateLoginNode(creds.me.id, config, creds.registeredLoginCount || 0)
 			logger.info({ node }, 'logging in...')
 		}
 
@@ -955,7 +955,15 @@ export const makeSocket = (config: SocketConfig) => {
 		logger.info('opened connection to WA')
 		clearTimeout(qrTimer) // will never happen in all likelyhood -- but just in case WA sends success on first try
 
-		ev.emit('creds.update', { me: { ...authState.creds.me!, lid: node.attrs.lid } })
+		// WA Web parity (BE#687): increment the persistent login counter on each successful stream
+		// open (WA Web's incrementLoginCounter in onOpenSocketStream). Persisted via creds.update →
+		// saved to the PVC auth-state, so it survives pod restarts and the next login presents it.
+		const registeredLoginCount = (authState.creds.registeredLoginCount || 0) + 1
+
+		ev.emit('creds.update', {
+			me: { ...authState.creds.me!, lid: node.attrs.lid },
+			registeredLoginCount
+		})
 
 		ev.emit('connection.update', { connection: 'open' })
 		void sendUnifiedSession()

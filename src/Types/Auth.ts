@@ -63,6 +63,12 @@ export type AuthenticationCreds = SignalCreds & {
 	processedHistoryMessages: MinimalMessage[]
 	/** number of times history & app state has been synced */
 	accountSyncCounter: number
+	/**
+	 * WA Web parity (BE#687): monotonic per-device login counter (WA Web's `lc`). Persisted here so it
+	 * survives pod restarts (restored from the PVC auth-state), incremented on each successful stream
+	 * open, and sent in the login ClientPayload as a device-continuity signal.
+	 */
+	registeredLoginCount?: number
 	accountSettings: AccountSettings
 	registered: boolean
 	pairingCode: string | undefined

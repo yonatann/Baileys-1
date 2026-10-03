@@ -370,6 +370,7 @@ export const initAuthCreds = (): AuthenticationCreds => {
 		nextPreKeyId: 1,
 		firstUnuploadedPreKeyId: 1,
 		accountSyncCounter: 0,
+		registeredLoginCount: 0,
 		accountSettings: {
 			unarchiveChats: false
 		},

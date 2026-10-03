@@ -67,14 +67,26 @@ const getClientPayload = (config: SocketConfig) => {
 	return payload
 }
 
-export const generateLoginNode = (userJid: string, config: SocketConfig): proto.IClientPayload => {
+export const generateLoginNode = (
+	userJid: string,
+	config: SocketConfig,
+	loginCounter = 0
+): proto.IClientPayload => {
 	const { user, device } = jidDecode(userJid)!
 	const payload: proto.IClientPayload = {
 		...getClientPayload(config),
-		passive: true,
+		// WA Web parity (BE#687): a sole/primary connection (our headless gateway is the account's
+		// only device) connects ACTIVE. WA Web resets passive=false after every successful connect;
+		// persistently announcing passive=true marked us as a secondary companion.
+		passive: false,
 		pull: true,
 		username: +user,
 		device: device,
+		// WA Web parity (BE#687): monotonic per-device login counter, persisted in creds (survives
+		// pod restarts via the PVC auth-state) and incremented on each successful stream open. Gives
+		// the server the device-continuity signal a reload presents; omitting it made every reconnect
+		// look like a device that had logged in zero times.
+		lc: loginCounter,
 		// TODO: investigate (hard set as false atm)
 		lidDbMigrated: false
 	}
