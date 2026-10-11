@@ -767,6 +767,12 @@ export const makeSocket = (config: SocketConfig) => {
 	// `refresh_code` notification is only honoured when it names OUR current ref (011:981).
 	let pairingHelloRef: string | null = null
 	const getPairingHelloRef = () => pairingHelloRef
+	const cachePairingHelloRef = (response?: BinaryNode) => {
+		const buf = response
+			? getBinaryNodeChildBuffer(getBinaryNodeChild(response, 'link_code_companion_reg') as BinaryNode, 'link_code_pairing_ref')
+			: undefined
+		pairingHelloRef = buf ? Buffer.from(buf).toString('hex') : null
+	}
 
 	const requestPairingCode = async (
 		phoneNumber: string,
@@ -786,13 +792,11 @@ export const makeSocket = (config: SocketConfig) => {
 			name: '~'
 		}
 		ev.emit('creds.update', authState.creds)
-		pairingHelloRef = null
+		cachePairingHelloRef()
 		// WA Web sends should_show_push_notification=true on the first hello only, false on refreshes (005:1099).
 		const showPush = opts?.showPushNotification !== false
 		// `query` (not sendNode) so the hello's result — its ref and a 429 rate-overlimit — is observable.
-		// If WhatsApp never answers with an IQ result we must not hang the caller: a TIMEOUT is treated as
-		// "sent, ref unknown"; only a real IQ error (e.g. 429) propagates.
-		const helloResult = await query({
+		const response = await query({
 			tag: 'iq',
 			attrs: {
 				to: S_WHATSAPP_NET,
@@ -840,18 +844,17 @@ export const makeSocket = (config: SocketConfig) => {
 					]
 				}
 			]
-		}, 10_000).catch((err: any) => {
-			if (err?.output?.statusCode === DisconnectReason.timedOut) {
-				return undefined
-			}
+		}, 30_000)
+		// A locally generated code is not usable until WhatsApp accepts companion_hello.
+		// waitForMessage may return undefined on timeout, so require an explicit IQ result.
+		if (response?.tag !== 'iq' || response.attrs?.type !== 'result') {
+			throw new Boom('Pairing code registration was not acknowledged', {
+				statusCode: DisconnectReason.timedOut
+			})
+		}
 
-			throw err
-		})
-		const helloRefBuf = helloResult && 'tag' in helloResult
-			? getBinaryNodeChildBuffer(getBinaryNodeChild(helloResult, 'link_code_companion_reg') as BinaryNode, 'link_code_pairing_ref')
-			: undefined
-		pairingHelloRef = helloRefBuf ? Buffer.from(helloRefBuf).toString('hex') : null
-		return authState.creds.pairingCode
+		cachePairingHelloRef(response)
+		return pairingCode
 	}
 
 	async function generatePairingKey() {
