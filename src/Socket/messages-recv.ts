@@ -130,6 +130,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		onUnexpectedError,
 		assertSessions,
 		sendNode,
+		getPairingHelloRef,
 		relayMessage,
 		sendReceipt,
 		uploadPreKeys,
@@ -1170,9 +1171,25 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				// link_code_companion_reg notifications during pairing. Only stage=primary_hello carries the
 				// primary keys; an interleaved stage=refresh_code has only link_code_pairing_ref. Processing it
 				// blindly hit toRequiredBuffer(undefined) -> "Invalid buffer" and pairing never completed.
+				if(linkCodeCompanionReg?.attrs?.stage === 'refresh_code') {
+					// BE#833 (WA Web 011:915/981): act only when the ref names OUR current hello; a stale
+					// refresh is ignored. force_manual_refresh -> stop auto-regen (005:1098).
+					const refreshRef = getBinaryNodeChildBuffer(linkCodeCompanionReg, 'link_code_pairing_ref')
+					const cachedRef = getPairingHelloRef()
+					if(!cachedRef || (refreshRef && Buffer.from(refreshRef).toString('hex') === cachedRef)) {
+						;(ev as any).emit('pairing.refresh_code', {
+							forceManual: linkCodeCompanionReg.attrs.force_manual_refresh === 'true'
+						})
+					}
+
+					break
+				}
+
 				if(linkCodeCompanionReg?.attrs?.stage !== 'primary_hello') {
 					break
 				}
+
+				;(ev as any).emit('pairing.primary_hello')
 				const ref = toRequiredBuffer(getBinaryNodeChildBuffer(linkCodeCompanionReg, 'link_code_pairing_ref'))
 				const primaryIdentityPublicKey = toRequiredBuffer(
 					getBinaryNodeChildBuffer(linkCodeCompanionReg, 'primary_identity_pub')
