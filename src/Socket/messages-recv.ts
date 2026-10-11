@@ -1176,7 +1176,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 					// refresh is ignored. force_manual_refresh -> stop auto-regen (005:1098).
 					const refreshRef = getBinaryNodeChildBuffer(linkCodeCompanionReg, 'link_code_pairing_ref')
 					const cachedRef = getPairingHelloRef()
-					if(!cachedRef || (refreshRef && Buffer.from(refreshRef).toString('hex') === cachedRef)) {
+					if(cachedRef && refreshRef && Buffer.from(refreshRef).toString('hex') === cachedRef) {
 						;(ev as any).emit('pairing.refresh_code', {
 							forceManual: linkCodeCompanionReg.attrs.force_manual_refresh === 'true'
 						})
