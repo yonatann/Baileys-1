@@ -1,5 +1,5 @@
 import { proto } from '../../../WAProto/index.js'
-import { getDeliveryReceiptType } from '../../Utils/messages'
+import { getDeliveryReceiptType, resolveIncomingReceiptType } from '../../Utils/messages'
 
 describe('getDeliveryReceiptType (WA Web sendDeliveryReceipt parity)', () => {
 	it('plain text -> typeless delivery receipt, regardless of online state', () => {
@@ -25,5 +25,28 @@ describe('getDeliveryReceiptType (WA Web sendDeliveryReceipt parity)', () => {
 	it('missing message -> typeless', () => {
 		expect(getDeliveryReceiptType(undefined)).toBeUndefined()
 		expect(getDeliveryReceiptType(null)).toBeUndefined()
+	})
+
+	it('AB-gated unified-infra addons + memberLabel -> inactive', () => {
+		expect(getDeliveryReceiptType({ pollUpdateMessage: {} })).toBe('inactive')
+		expect(getDeliveryReceiptType({ encEventResponseMessage: {} })).toBe('inactive')
+		expect(getDeliveryReceiptType({ commentMessage: {} })).toBe('inactive')
+		expect(getDeliveryReceiptType({ encCommentMessage: {} })).toBe('inactive')
+		expect(getDeliveryReceiptType({ protocolMessage: { memberLabel: {} } })).toBe('inactive')
+		expect(getDeliveryReceiptType({ protocolMessage: { type: 0 } })).toBeUndefined()
+	})
+})
+
+describe('resolveIncomingReceiptType branch ordering', () => {
+	const react: proto.IMessage = { reactionMessage: { text: 'x' } }
+	it('peer category wins over everything', () => {
+		expect(resolveIncomingReceiptType({ category: 'peer', fromMe: true, message: react })).toBe('peer_msg')
+	})
+	it('fromMe -> sender (over content type)', () => {
+		expect(resolveIncomingReceiptType({ category: undefined, fromMe: true, message: react })).toBe('sender')
+	})
+	it('otherwise content-based', () => {
+		expect(resolveIncomingReceiptType({ category: undefined, fromMe: false, message: react })).toBe('inactive')
+		expect(resolveIncomingReceiptType({ category: undefined, fromMe: false, message: { conversation: 'a' } })).toBeUndefined()
 	})
 })

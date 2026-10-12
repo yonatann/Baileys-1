@@ -1029,6 +1029,9 @@ export function getAggregateResponsesInEventMessage(
  * delivery receipt for ordinary chat content and `type="inactive"` only when the processed content is a
  * non-activity kind (WAWebHandleMsgProcess.processMsgs `hasInactiveMsg`: addons/reactions, keep-in-chat,
  * history bundle/notice). It does NOT depend on app focus / online state.
+ * pollUpdate / encEventResponse / comment / encComment / protocol memberLabel are routed through WA Web's
+ * AB-gated `isUnifiedInfraEnabledForType` addon path (b06@1797762, b07@467246); treating them as inactive is
+ * the safer parity guess but is UNVERIFIED against a live capture.
  */
 export const getDeliveryReceiptType = (message: proto.IMessage | null | undefined): 'inactive' | undefined => {
 	const content = normalizeMessageContent(message)
@@ -1037,12 +1040,28 @@ export const getDeliveryReceiptType = (message: proto.IMessage | null | undefine
 		content?.encReactionMessage ||
 		content?.keepInChatMessage ||
 		content?.messageHistoryBundle ||
-		content?.messageHistoryNotice
+		content?.messageHistoryNotice ||
+		content?.pollUpdateMessage ||
+		content?.encEventResponseMessage ||
+		content?.commentMessage ||
+		content?.encCommentMessage ||
+		content?.protocolMessage?.memberLabel
 	) {
 		return 'inactive'
 	}
 
 	return undefined
+}
+
+/** Receipt type for an incoming message: peer category > fromMe (sender) > content-based. */
+export const resolveIncomingReceiptType = (opts: {
+	category?: string
+	fromMe?: boolean | null
+	message: proto.IMessage | null | undefined
+}): 'peer_msg' | 'sender' | 'inactive' | undefined => {
+	if (opts.category === 'peer') return 'peer_msg'
+	if (opts.fromMe) return 'sender'
+	return getDeliveryReceiptType(opts.message)
 }
 
 /** Given a list of message keys, aggregates them by chat & sender. Useful for sending read receipts in bulk */
