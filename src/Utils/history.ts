@@ -2,7 +2,7 @@ import { pipeline } from 'stream/promises'
 import { promisify } from 'util'
 import { createInflate, inflate } from 'zlib'
 import { proto } from '../../WAProto/index.js'
-import type { Chat, Contact, LIDMapping, WAMessage } from '../Types'
+import type { Chat, Contact, LIDMapping, WAMessage, WAMessageKey } from '../Types'
 import { WAMessageStubType } from '../Types'
 import { isHostedLidUser, isHostedPnUser, isLidUser, isPnUser } from '../WABinary'
 import { toNumber } from './generics'
@@ -160,3 +160,46 @@ export const getHistoryMsg = (message: proto.IMessage) => {
 
 	return anyHistoryMsg
 }
+
+/**
+ * HISTORY_SYNC_ON_DEMAND request body, field-for-field what WA Web builds (b07@784600-785634):
+ * {chatJid, oldestMsgId, oldestMsgFromMe, onDemandMsgCount, oldestMsgTimestampMs, supportInlineResponse:true}.
+ * WA Web never populates `accountLid` (proto field 6) here, so neither do we.
+ *
+ * `supportInlineResponse` (field 7) is WA Web's `!0`, but it tells the phone to answer INLINE in a
+ * PEER_DATA_OPERATION_REQUEST_RESPONSE instead of a history-sync notification; process-message does not
+ * consume inline history responses, so it is OPT-IN here (default omitted) to avoid breaking on-demand history.
+ */
+export const buildHistorySyncOnDemandRequest = ({
+	count,
+	oldestMsgKey,
+	oldestMsgTimestamp,
+	supportInlineResponse
+}: {
+	count: number
+	oldestMsgKey: WAMessageKey
+	oldestMsgTimestamp: number | Long
+	supportInlineResponse?: boolean
+}): proto.Message.PeerDataOperationRequestMessage.IHistorySyncOnDemandRequest => ({
+	chatJid: oldestMsgKey.remoteJid,
+	oldestMsgFromMe: oldestMsgKey.fromMe,
+	oldestMsgId: oldestMsgKey.id,
+	oldestMsgTimestampMs: oldestMsgTimestamp,
+	onDemandMsgCount: count,
+	...(supportInlineResponse ? { supportInlineResponse: true } : {})
+})
+
+/**
+ * Stanza attrs for a peer-data-operation message. WA Web sets `privacy_sensitive` to
+ * PrivacySensitiveType.OnDemand (=1, b07@647234) for HISTORY_SYNC_ON_DEMAND only (b07@779113 `F(e)`,
+ * unless justknob 4199); stanza attr emitted at b07@655635.
+ */
+export const getPeerDataOperationStanzaAttrs = (
+	requestType: proto.Message.PeerDataOperationRequestType | null | undefined
+): { [key: string]: string } => ({
+	category: 'peer',
+	push_priority: 'high_force',
+	...(requestType === proto.Message.PeerDataOperationRequestType.HISTORY_SYNC_ON_DEMAND
+		? { privacy_sensitive: '1' }
+		: {})
+})

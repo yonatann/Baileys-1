@@ -27,6 +27,7 @@ import {
 	generateMessageIDV2,
 	generateParticipantHashV2,
 	generateWAMessage,
+	getPeerDataOperationStanzaAttrs,
 	getStatusCodeForMediaRetry,
 	getUrlFromDirectPath,
 	getWAUploadToServer,
@@ -542,11 +543,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		const meJid = jidNormalizedUser(authState.creds.me.id)
 
 		const msgId = await relayMessage(meJid, protocolMessage, {
-			additionalAttributes: {
-				category: 'peer',
-
-				push_priority: 'high_force'
-			},
+			// privacy_sensitive=1 for HISTORY_SYNC_ON_DEMAND, like WA Web (b07@655635/779113)
+			additionalAttributes: getPeerDataOperationStanzaAttrs(pdoMessage.peerDataOperationRequestType),
 			additionalNodes: [
 				{
 					tag: 'meta',
