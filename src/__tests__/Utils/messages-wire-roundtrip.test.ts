@@ -8,7 +8,7 @@ describe('messageSecret option — proto.Message wire round-trip', () => {
 
     // Stub upload that returns the minimal shape prepareWAMessageMedia expects
     const makeUploadStub = () =>
-        jest.fn().mockResolvedValue({
+        jest.fn<() => Promise<{ mediaUrl: string; directPath: string }>>().mockResolvedValue({
             mediaUrl: 'https://example.com/uploaded',
             directPath: '/v/t62.7117-24/x',
         }) as any
