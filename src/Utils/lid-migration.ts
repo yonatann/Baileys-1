@@ -26,7 +26,12 @@ export const parseClientPairingProps = (pairSuccessStanza: BinaryNode): proto.IC
 		return undefined
 	}
 
-	return proto.ClientPairingProps.decode(clientPropsNode.content)
+	try {
+		return proto.ClientPairingProps.decode(clientPropsNode.content)
+	} catch {
+		// A malformed blob must never end the pairing: the flag is then treated as absent (no logout, no flip).
+		return undefined
+	}
 }
 
 /**

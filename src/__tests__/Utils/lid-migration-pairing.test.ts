@@ -144,3 +144,21 @@ describe('WA Web parity FR1: pair-success ClientPairingProps.isChatDbLidMigrated
 		})
 	})
 })
+
+describe('malformed client-props never throws (FR1 review: no connection end from the flag path)', () => {
+	it('returns undefined for garbage bytes instead of throwing', () => {
+		const stanza = {
+			tag: 'iq',
+			attrs: {},
+			content: [
+				{
+					tag: 'pair-success',
+					attrs: {},
+					content: [{ tag: 'client-props', attrs: {}, content: new Uint8Array([0xff, 0xff, 0xff, 0x7f, 0x01]) }]
+				}
+			]
+		} as unknown as BinaryNode
+		expect(() => parseClientPairingProps(stanza)).not.toThrow()
+		expect(parseClientPairingProps(stanza)).toBeUndefined()
+	})
+})
