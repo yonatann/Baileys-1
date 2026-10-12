@@ -7,7 +7,7 @@ import {
 	runPreKeyLow,
 	uploadWithServerFlag
 } from '../../Utils/login-traffic-policy'
-import { type BinaryNode, S_WHATSAPP_NET } from '../../WABinary'
+import { assertNodeErrorFree, type BinaryNode, S_WHATSAPP_NET } from '../../WABinary'
 
 // WA Web parity (B5): no unconditional prekey-count / digest IQ at login.
 // Evidence: WAWebRegisterPassiveTasks "KeyUpload" runs only when !getServerHasPreKeys (b06@2282389+);
@@ -84,7 +84,22 @@ describe('runKeyDigest', () => {
 		const upload = jest.fn<() => Promise<void>>(async () => {})
 		await runKeyDigest({
 			queryDigest: async () => {
-				throw new Boom('no record', { statusCode: 404 })
+				throw new Boom('no record', { data: 404 })
+			},
+			upload
+		})
+		expect(upload).toHaveBeenCalledTimes(1)
+	})
+	it('re-uploads on a real <iq type=error><error code=404> (the shape query()/assertNodeErrorFree throws)', async () => {
+		const upload = jest.fn<() => Promise<void>>(async () => {})
+		await runKeyDigest({
+			queryDigest: async () => {
+				assertNodeErrorFree({
+					tag: 'iq',
+					attrs: { type: 'error' },
+					content: [{ tag: 'error', attrs: { code: '404', text: 'item-not-found' } }]
+				})
+				return { tag: 'iq', attrs: {} }
 			},
 			upload
 		})
