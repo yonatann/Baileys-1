@@ -51,8 +51,10 @@ export const runKeyDigest = async (deps: {
 	try {
 		res = await deps.queryDigest()
 	} catch (e) {
-		const code = e as { output?: { statusCode?: number }; data?: { code?: number | string } }
-		if (code?.output?.statusCode === 404 || Number(code?.data?.code) === 404) {
+		// query() -> assertNodeErrorFree throws `new Boom(text, { data: +code })`, so the IQ
+		// error code lands in `data` as a bare number (statusCode stays 500).
+		const err = e as { output?: { statusCode?: number }; data?: unknown }
+		if (Number(err?.data) === 404 || err?.output?.statusCode === 404) {
 			await deps.upload()
 			return
 		}
