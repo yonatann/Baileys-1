@@ -109,6 +109,15 @@ describe('server_sync version filter (C5 / WA Web parity)', () => {
 		expect(selectStaleServerSyncCollections(node, () => 5)).toEqual(['regular'])
 	})
 
+	it('resyncs a collection whose version attr is empty or non-numeric (not parsed as 0)', () => {
+		const node = versionedNode([
+			['regular', ''],
+			['regular_high', 'abc'],
+			['regular_low', '   ']
+		])
+		expect(selectStaleServerSyncCollections(node, () => 5)).toEqual(['regular', 'regular_high', 'regular_low'])
+	})
+
 	it('still drops unknown collection names', () => {
 		const node = versionedNode([
 			['bogus', '9'],

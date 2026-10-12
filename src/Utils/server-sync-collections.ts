@@ -50,15 +50,14 @@ export function selectStaleServerSyncCollections(
 	const stale: WAPatchName[] = []
 	for (const name of collectServerSyncCollectionNames(node)) {
 		const collection = getBinaryNodeChildren(node, 'collection').find(c => c.attrs.name === name)
-		const serverVersion = collection?.attrs.version === undefined ? undefined : Number(collection.attrs.version)
+		// An empty, whitespace-only or non-numeric version is "no server version" (WA Web: serverV
+		// undefined -> sync), not 0: Number('') === 0 would wrongly skip a stale collection.
+		const rawVersion = collection?.attrs.version?.trim()
+		const parsedVersion = rawVersion ? Number(rawVersion) : Number.NaN
+		const serverVersion = Number.isFinite(parsedVersion) ? parsedVersion : undefined
 		const localVersion = localVersionOf(name)
 
-		if (
-			localVersion === undefined ||
-			serverVersion === undefined ||
-			Number.isNaN(serverVersion) ||
-			localVersion < serverVersion
-		) {
+		if (localVersion === undefined || serverVersion === undefined || localVersion < serverVersion) {
 			stale.push(name)
 		}
 	}
