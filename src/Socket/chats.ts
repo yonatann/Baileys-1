@@ -109,8 +109,8 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		profilePicPrivacyToken: true,
 		/** AB prop 14303: issue tctokens to LID instead of PN. WA Web default: false. */
 		lidTrustedTokenIssueToLid: false,
-		/** AB prop 4746 (username_contact_display): WA Web usernameDisplayedEnabled(). WA default: true. */
-		usernameDisplayedEnabled: USERNAME_CONTACT_DISPLAY_DEFAULT
+		/** AB prop 4746 (username_contact_display): WA Web usernameDisplayedEnabled() prop term. WA default: true. */
+		usernameContactDisplayProp: USERNAME_CONTACT_DISPLAY_DEFAULT
 	}
 	// WA Web parity (B7): restore the last-known server props so skipping the open-time AB-props IQ (or a
 	// delta response that omits unchanged props) does not silently fall back to the defaults above.
@@ -1122,7 +1122,10 @@ export const makeChatsSocket = (config: SocketConfig) => {
 			serverProps.lidTrustedTokenIssueToLid = lidIssueProp === 'true' || lidIssueProp === '1'
 		}
 
-		serverProps.usernameDisplayedEnabled = applyUsernameContactDisplayProp(props, serverProps.usernameDisplayedEnabled)
+		serverProps.usernameContactDisplayProp = applyUsernameContactDisplayProp(
+			props,
+			serverProps.usernameContactDisplayProp
+		)
 
 		if (propsNode) {
 			authState.creds.abPropsServerProps = { ...serverProps }

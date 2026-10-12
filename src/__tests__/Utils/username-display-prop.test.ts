@@ -25,9 +25,18 @@ describe('username_contact_display AB prop (4746)', () => {
 		expect(applyUsernameContactDisplayProp({ '4746': '0' }, true)).toBe(false)
 	})
 
-	it('accepts the name-keyed form and the "true"/"false" spellings', () => {
-		expect(applyUsernameContactDisplayProp({ username_contact_display: 'true' }, false)).toBe(true)
-		expect(applyUsernameContactDisplayProp({ username_contact_display: 'false' }, true)).toBe(false)
+	it('parses the WA bool spellings "1", "True", "true" as true', () => {
+		expect(applyUsernameContactDisplayProp({ '4746': 'True' }, false)).toBe(true)
+		expect(applyUsernameContactDisplayProp({ '4746': 'true' }, false)).toBe(true)
+	})
+
+	it('treats any other value as false (WA parseConfigValue: "1"|"True"|"true")', () => {
+		expect(applyUsernameContactDisplayProp({ '4746': 'false' }, true)).toBe(false)
+		expect(applyUsernameContactDisplayProp({ '4746': '0' }, true)).toBe(false)
+	})
+
+	it('ignores the name-keyed form (WA abt map is keyed by config_code only)', () => {
+		expect(applyUsernameContactDisplayProp({ username_contact_display: 'true' }, false)).toBe(false)
 	})
 
 	it('absent on a fresh session keeps the WA default (true)', () => {
@@ -50,7 +59,7 @@ describe('username_contact_display AB prop (4746)', () => {
 		const onNode: BinaryNode = {
 			tag: 'props',
 			attrs: {},
-			content: [{ tag: 'prop', attrs: { name: 'username_contact_display', value: '1' } }]
+			content: [{ tag: 'prop', attrs: { config_code: '4746', config_value: 'True' } }]
 		}
 		expect(applyUsernameContactDisplayProp(reduceBinaryNodeToDictionary(onNode, 'prop'), false)).toBe(true)
 	})
