@@ -32,7 +32,7 @@ import {
 } from '../WABinary'
 import { aesDecryptGCM, hmacSign } from './crypto'
 import { getKeyAuthor, toNumber } from './generics'
-import { downloadAndProcessHistorySyncNotification } from './history'
+import { downloadAndProcessHistorySyncNotification, type HistorySyncAcker } from './history'
 import type { ILogger } from './logger'
 import { buildMergedTcTokenIndexWrite, resolveTcTokenJid } from './tc-token-utils'
 
@@ -46,6 +46,12 @@ type ProcessMessageContext = {
 	options: RequestInit
 	signalRepository: SignalRepositoryWithLIDStore
 	getMessage: SocketConfig['getMessage']
+	/**
+	 * `hist_sync` receipts (see history.ts `createHistorySyncAcker`). `chunkAck` hands the chunk's receipt to the
+	 * `messaging-history.set` event, released after the store (WA Web b07@572936); `onDownloadFailed` sends the
+	 * encrypted server-error receipt when the download stage fails.
+	 */
+	historySyncAcker?: Pick<HistorySyncAcker, 'chunkAck' | 'onDownloadFailed'>
 }
 
 const REAL_MSG_STUB_TYPES = new Set([
@@ -301,7 +307,8 @@ const processMessage = async (
 		keyStore,
 		logger,
 		options,
-		getMessage
+		getMessage,
+		historySyncAcker
 	}: ProcessMessageContext
 ) => {
 	const meId = creds.me!.id
@@ -396,7 +403,9 @@ const processMessage = async (
 						})
 					}
 
-					const data = await downloadAndProcessHistorySyncNotification(histNotification, options, logger)
+					const data = await downloadAndProcessHistorySyncNotification(histNotification, options, logger, err =>
+						historySyncAcker?.onDownloadFailed(histNotification, message, err)
+					)
 
 					if (data.lidPnMappings?.length) {
 						logger?.debug({ count: data.lidPnMappings.length }, 'processing LID-PN mappings from history sync')
@@ -411,7 +420,8 @@ const processMessage = async (
 						...data,
 						isLatest: histNotification.syncType !== proto.HistorySync.HistorySyncType.ON_DEMAND ? isLatest : undefined,
 						chunkOrder: histNotification.chunkOrder,
-						peerDataRequestSessionId: histNotification.peerDataRequestSessionId
+						peerDataRequestSessionId: histNotification.peerDataRequestSessionId,
+						historySyncAck: historySyncAcker?.chunkAck(histNotification, message)
 					})
 				}
 
