@@ -3,7 +3,28 @@ import type { LIDMapping, SignalKeyStoreWithTransaction } from '../Types'
 import type { ILogger } from '../Utils/logger'
 import { isHostedPnUser, isLidUser, isPnUser, jidDecode, jidNormalizedUser, WAJIDDomains } from '../WABinary'
 
+export interface LIDMappingStoreOptions {
+	/** How long a pn→lid USync MISS suppresses re-querying that pn (default 10 min). */
+	negativeTtlMs?: number
+	/** Max negative entries held (oldest evicted first; default 5000). */
+	negativeMaxEntries?: number
+	/** Injectable clock for tests. */
+	now?: () => number
+}
+
 export class LIDMappingStore {
+	/**
+	 * Bounded negative cache of pn users whose USync returned no LID. WA Web does not issue a USync on a
+	 * mapping miss at all - `checkPnToLidMapping` only logs "LID null - n PNs, missing: ..." (b06@1508452) -
+	 * so re-querying on every miss (e.g. each profilePictureUrl / tc-token build) is extra traffic WA Web
+	 * never makes. Rather than drop the query (the send path relies on it to learn mappings), a miss is
+	 * remembered for a short TTL. Insertion-ordered Map = FIFO eviction bound.
+	 */
+	private readonly negativeCache = new Map<string, number>()
+	private readonly negativeTtlMs: number
+	private readonly negativeMaxEntries: number
+	private readonly now: () => number
+
 	private readonly mappingCache = new LRUCache<string, string>({
 		ttl: 3 * 24 * 60 * 60 * 1000, // 7 days
 		ttlAutopurge: true,
@@ -20,8 +41,12 @@ export class LIDMappingStore {
 	constructor(
 		keys: SignalKeyStoreWithTransaction,
 		logger: ILogger,
-		pnToLIDFunc?: (jids: string[]) => Promise<LIDMapping[] | undefined>
+		pnToLIDFunc?: (jids: string[]) => Promise<LIDMapping[] | undefined>,
+		options: LIDMappingStoreOptions = {}
 	) {
+		this.negativeTtlMs = options.negativeTtlMs ?? 10 * 60 * 1000
+		this.negativeMaxEntries = options.negativeMaxEntries ?? 5000
+		this.now = options.now ?? (() => Date.now())
 		this.keys = keys
 		this.pnToLIDFunc = pnToLIDFunc
 		this.logger = logger
@@ -100,6 +125,7 @@ export class LIDMappingStore {
 
 		// Update cache after successful DB write
 		for (const [pnUser, lidUser] of Object.entries(pairMap)) {
+			this.negativeCache.delete(pnUser)
 			this.mappingCache.set(`pn:${pnUser}`, lidUser)
 			this.mappingCache.set(`lid:${lidUser}`, pnUser)
 		}
@@ -193,6 +219,11 @@ export class LIDMappingStore {
 						continue
 					}
 				} else {
+					if (this.isNegativelyCached(pnUser)) {
+						this.logger.trace(`No LID mapping for PN user ${pnUser}; recent USync miss cached, not re-querying`)
+						continue
+					}
+
 					this.logger.trace(`No LID mapping found for PN user ${pnUser}; batch getting from USync`)
 					const device = decoded!.device || 0
 					let normalizedPn = jidNormalizedUser(pn)
@@ -211,6 +242,17 @@ export class LIDMappingStore {
 
 		if (Object.keys(usyncFetch).length > 0) {
 			const result = await this.pnToLIDFunc?.(Object.keys(usyncFetch)) // this function already adds LIDs to mapping
+			// A thrown error propagates above (transient, not cached); an empty/undefined answer is a miss.
+			const answered = new Set<string>()
+			for (const pair of result ?? []) {
+				const u = jidDecode(pair.pn)?.user
+				if (u) answered.add(u)
+			}
+			for (const pnJid of Object.keys(usyncFetch)) {
+				const u = jidDecode(pnJid)?.user
+				if (u && !answered.has(u)) this.rememberMiss(u)
+			}
+
 			if (result && result.length > 0) {
 				await this.storeLIDPNMappings(result)
 				for (const pair of result) {
@@ -238,6 +280,27 @@ export class LIDMappingStore {
 		}
 
 		return Object.values(successfulPairs).length > 0 ? Object.values(successfulPairs) : null
+	}
+
+	private isNegativelyCached(pnUser: string): boolean {
+		const expiresAt = this.negativeCache.get(pnUser)
+		if (expiresAt === undefined) return false
+		if (expiresAt <= this.now()) {
+			this.negativeCache.delete(pnUser)
+			return false
+		}
+
+		return true
+	}
+
+	private rememberMiss(pnUser: string): void {
+		this.negativeCache.delete(pnUser)
+		this.negativeCache.set(pnUser, this.now() + this.negativeTtlMs)
+		while (this.negativeCache.size > this.negativeMaxEntries) {
+			const oldest = this.negativeCache.keys().next().value
+			if (oldest === undefined) break
+			this.negativeCache.delete(oldest)
+		}
 	}
 
 	async getPNForLID(lid: string): Promise<string | null> {
@@ -331,5 +394,6 @@ export class LIDMappingStore {
 	 */
 	close(): void {
 		this.mappingCache.clear()
+		this.negativeCache.clear()
 	}
 }
