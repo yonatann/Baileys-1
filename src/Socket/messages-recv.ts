@@ -8,6 +8,7 @@ import {
 	KEY_BUNDLE_TYPE,
 	INITIAL_PREKEY_COUNT,
 	PLACEHOLDER_MAX_AGE_SECONDS,
+	PROCESSABLE_HISTORY_TYPES,
 	STATUS_EXPIRY_SECONDS
 } from '../Defaults'
 import type {
@@ -38,7 +39,6 @@ import {
 	extractAddressingContext,
 	extractE2ESessionFromRetryReceipt,
 	getCallStatusFromNode,
-	getHistoryMsg,
 	getNextPreKeys,
 	getStatusFromReceiptType,
 	resolveIncomingReceiptType,
@@ -55,6 +55,7 @@ import {
 	NO_MESSAGE_FOUND_ERROR_TEXT,
 	buildHistorySyncOnDemandRequest,
 	SERVER_ERROR_CODES,
+	createHistorySyncAcker,
 	toNumber,
 	unixTimestampSeconds,
 	xmppPreKey,
@@ -62,6 +63,7 @@ import {
 } from '../Utils'
 import { classifyServerEncryptNotification, runPreKeyLow } from '../Utils/login-traffic-policy'
 import { makeMutex } from '../Utils/make-mutex'
+import { buildHistSyncServerErrorReceiptNode } from '../Utils/messages-media'
 import { makeOfflineNodeProcessor, type MessageType } from '../Utils/offline-node-processor'
 import { buildAckStanza } from '../Utils/stanza-ack'
 import {
@@ -1669,6 +1671,14 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		}
 	}
 
+	const historyAcker = createHistorySyncAcker({
+		shouldSyncHistoryMessage: config.shouldSyncHistoryMessage,
+		processableTypes: PROCESSABLE_HISTORY_TYPES,
+		sendHistSyncReceipt: msg =>
+			sendReceipt(jidNormalizedUser(msg.key.remoteJid!), undefined, [msg.key.id!], 'hist_sync'),
+		sendServerErrorReceipt: (remote, id, mediaKey) => sendNode(buildHistSyncServerErrorReceiptNode({ remote, id, mediaKey }))
+	})
+
 	const handleMessage = async (node: BinaryNode) => {
 		const encNode = getBinaryNodeChild(node, 'enc')
 		// TODO: temporary fix for crashes and issues resulting of failed msmsg decryption
@@ -1841,12 +1851,8 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						acked = true
 						await sendReceipt(msg.key.remoteJid!, participant!, [msg.key.id!], type)
 
-						// send ack for history message
-						const isAnyHistoryMsg = getHistoryMsg(msg.message!)
-						if (isAnyHistoryMsg) {
-							const jid = jidNormalizedUser(msg.key.remoteJid!)
-							await sendReceipt(jid, undefined, [msg.key.id!], 'hist_sync') // TODO: investigate
-						}
+						// hist_sync: V3 + not-processed chunks are acked here; processed chunks after store (see createHistorySyncAcker)
+						await historyAcker.ackOnReceive(msg)
 					} else {
 						acked = true
 						await sendMessageAck(node)
@@ -1856,7 +1862,9 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 				cleanMessage(msg, authState.creds.me!.id, authState.creds.me!.lid!)
 
-				await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify')
+				await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify', {
+					historySyncAcker: historyAcker
+				})
 			})
 		} catch (error) {
 			logger.error({ error, node: binaryNodeToString(node) }, 'error in handling message')
