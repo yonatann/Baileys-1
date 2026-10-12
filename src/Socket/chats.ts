@@ -30,6 +30,9 @@ import type { QuickReplyAction } from '../Types/Bussines.js'
 import type { LabelActionBody } from '../Types/Label'
 import { SyncState } from '../Types/State'
 import {
+	buildStarLegacyRemovePatch,
+	isStarLegacyCleanupPatch,
+	stateHoldsIndex,
 	chatModificationToAppPatch,
 	type ChatMutationMap,
 	decodePatches,
@@ -899,6 +902,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	}
 
 	const appPatch = async (patchCreate: WAPatchCreate) => {
+		let skipped = false
 		const name = patchCreate.type
 		const myAppStateKeyId = authState.creds.myAppStateKeyId
 		if (!myAppStateKeyId) {
@@ -916,6 +920,16 @@ export const makeChatsSocket = (config: SocketConfig) => {
 
 				const { [name]: currentSyncVersion } = await authState.keys.get('app-state-sync-version', [name])
 				initial = currentSyncVersion ? ensureLTHashStateVersion(currentSyncVersion) : newLTHashState()
+
+				// Legacy star cleanup: re-check under the mutex against the freshly resynced regular_low
+				// state, so a concurrent chatModify can't send a second REMOVE with no previous SET.
+				if (
+					isStarLegacyCleanupPatch(patchCreate) &&
+					!(await stateHoldsIndex(patchCreate.index, myAppStateKeyId, initial, getAppStateSyncKey))
+				) {
+					skipped = true
+					return
+				}
 
 				encodeResult = await encodeSyncdPatch(patchCreate, myAppStateKeyId, initial, getAppStateSyncKey)
 				const { patch, state } = encodeResult
@@ -956,6 +970,10 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				await authState.keys.set({ 'app-state-sync-version': { [name]: state } })
 			}, authState?.creds?.me?.id || 'app-patch')
 		})
+
+		if (skipped || isStarLegacyCleanupPatch(patchCreate)) {
+			return
+		}
 
 		if (config.emitOwnEvents) {
 			const { onMutation } = newAppStateChunkHandler(false)
@@ -1033,9 +1051,35 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	 * lastMessages must be sorted in reverse chronologically
 	 * requires the last messages till the last message received; required for archive & unread
 	 */
-	const chatModify = (mod: ChatModification, jid: string) => {
+	const chatModify = async (mod: ChatModification, jid: string) => {
 		const patch = chatModificationToAppPatch(mod, jid)
-		return appPatch(patch)
+		// Ordering: SET in regular_high FIRST, then REMOVE the legacy regular_low entry.
+		// If the SET fails nothing changed (the call rejects, low untouched). If the REMOVE fails
+		// after the SET succeeded, the user's (un)star took effect and the stale low entry is
+		// exactly the pre-existing state (retried on the next star/unstar of that message), so we
+		// warn instead of failing. The reverse order could drop the star entirely on a failed SET.
+		await appPatch(patch)
+		if (patch.type === 'regular_high' && patch.index[0] === 'star') {
+			try {
+				const myAppStateKeyId = authState.creds.myAppStateKeyId
+				if (myAppStateKeyId) {
+					// Local stored state only (no resync): if regular_low was never synced/loaded
+					// the map is empty and there is nothing to clean up.
+					const { regular_low: lowState } = await authState.keys.get('app-state-sync-version', ['regular_low'])
+					const removePatch = await buildStarLegacyRemovePatch(
+						patch,
+						myAppStateKeyId,
+						lowState ? ensureLTHashStateVersion(lowState) : undefined,
+						getAppStateSyncKey
+					)
+					if (removePatch) {
+						await appPatch(removePatch)
+					}
+				}
+			} catch (error) {
+				logger.warn({ trace: (error as Error)?.stack }, 'failed to remove legacy regular_low star entry')
+			}
+		}
 	}
 
 	/**
