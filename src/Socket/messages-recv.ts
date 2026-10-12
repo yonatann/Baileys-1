@@ -41,6 +41,7 @@ import {
 	getHistoryMsg,
 	getNextPreKeys,
 	getStatusFromReceiptType,
+	resolveIncomingReceiptType,
 	collectServerSyncCollectionNames,
 	extractAccountSyncDeviceSync,
 	reconcileOwnDevicesOnAccountSync,
@@ -162,8 +163,6 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 	// Debounce identity-change session refreshes per JID to avoid bursts
 	const identityAssertDebounce = new NodeCache<boolean>({ stdTTL: 5, useClones: false })
-
-	let sendActiveReceipts = false
 
 	const fetchMessageHistory = async (
 		count: number,
@@ -1792,20 +1791,17 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 					const isNewsletter = isJidNewsletter(msg.key.remoteJid!)
 					if (!isNewsletter) {
 						// no type in the receipt => message delivered
-						let type: MessageReceiptType = undefined
+						const type: MessageReceiptType = resolveIncomingReceiptType({
+							category,
+							fromMe: msg.key.fromMe,
+							message: msg.message
+						})
 						let participant = msg.key.participant
-						if (category === 'peer') {
-							// special peer message
-							type = 'peer_msg'
-						} else if (msg.key.fromMe) {
-							// message was sent by us from a different device
-							type = 'sender'
-							// need to specially handle this case
+						if (type === 'sender') {
+							// message was sent by us from a different device; need to specially handle this case
 							if (isLidUser(msg.key.remoteJid!) || isLidUser(msg.key.remoteJidAlt)) {
 								participant = author // TODO: investigate sending receipts to LIDs and not PNs
 							}
-						} else if (!sendActiveReceipts) {
-							type = 'inactive'
 						}
 
 						acked = true
@@ -2107,11 +2103,6 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	const inFlight463Recoveries = new Set<string>()
 
 	ev.on('connection.update', ({ isOnline, connection }) => {
-		if (typeof isOnline !== 'undefined') {
-			sendActiveReceipts = isOnline
-			logger.trace(`sendActiveReceipts set to "${sendActiveReceipts}"`)
-		}
-
 		// Flush pending tctoken index save on disconnect to avoid writing after close
 		if (connection === 'close' && tcTokenIndexTimer) {
 			clearTimeout(tcTokenIndexTimer)
@@ -2147,7 +2138,6 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		}
 
 		identityAssertDebounce.close()
-		sendActiveReceipts = false
 	})
 
 	async function pruneExpiredTcTokens() {
