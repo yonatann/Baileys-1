@@ -11,6 +11,7 @@ import {
 	NOISE_WA_HEADER,
 	PROCESSABLE_HISTORY_TYPES,
 	TimeMs,
+	PASSIVE_TASK_FALLBACK_MS,
 	UPLOAD_TIMEOUT
 } from '../Defaults'
 import {
@@ -45,6 +46,7 @@ import {
 	nextPresenceNameOnCredsUpdate,
 	xmppSignedPreKey
 } from '../Utils'
+import { decideLoginPreKeyCheck, runKeyDigest, uploadWithServerFlag } from '../Utils/login-traffic-policy'
 import {
 	assertNodeErrorFree,
 	type BinaryNode,
@@ -230,18 +232,16 @@ export const makeSocket = (config: SocketConfig) => {
 	}
 
 	// Validate current key-bundle on server; on failure, trigger pre-key upload and rethrow
-	const digestKeyBundle = async (): Promise<void> => {
-		const res = await query({
-			tag: 'iq',
-			attrs: { to: S_WHATSAPP_NET, type: 'get', xmlns: 'encrypt' },
-			content: [{ tag: 'digest', attrs: {} }]
+	const digestKeyBundle = async (): Promise<void> =>
+		runKeyDigest({
+			queryDigest: () =>
+				query({
+					tag: 'iq',
+					attrs: { to: S_WHATSAPP_NET, type: 'get', xmlns: 'encrypt' },
+					content: [{ tag: 'digest', attrs: {} }]
+				}),
+			upload: () => uploadPreKeys(INITIAL_PREKEY_COUNT)
 		})
-		const digestNode = getBinaryNodeChild(res, 'digest')
-		if (!digestNode) {
-			await uploadPreKeys()
-			throw new Error('encrypt/get digest returned no digest node')
-		}
-	}
 
 	// Rotate our signed pre-key on server; on failure, run digest as fallback and rethrow
 	const rotateSignedPreKey = async (): Promise<void> => {
@@ -530,7 +530,10 @@ export const makeSocket = (config: SocketConfig) => {
 
 		// Add timeout protection
 		uploadPreKeysPromise = Promise.race([
-			uploadLogic(0),
+			uploadWithServerFlag(
+				flag => ev.emit('creds.update', { serverHasPreKeys: flag }),
+				() => uploadLogic(0)
+			),
 			new Promise<void>((_, reject) =>
 				setTimeout(() => reject(new Boom('Pre-key upload timeout', { statusCode: 408 })), UPLOAD_TIMEOUT)
 			)
@@ -580,6 +583,7 @@ export const makeSocket = (config: SocketConfig) => {
 				await uploadPreKeys(count)
 			} else {
 				logger.info(`PreKey validation passed - Server: ${preKeyCount}, Current prekey ${currentPreKeyId} exists`)
+				if (creds.serverHasPreKeys !== true) ev.emit('creds.update', { serverHasPreKeys: true })
 			}
 		} catch (error) {
 			logger.error({ error }, 'Failed to check/upload pre-keys during initialization')
@@ -626,6 +630,9 @@ export const makeSocket = (config: SocketConfig) => {
 		})
 	}
 
+	let offlineDeliveryEnded = false
+	let offlineEndFallbackTimer: ReturnType<typeof setTimeout> | undefined
+	const offlineEndTasks: Array<() => Promise<void> | void> = []
 	const end = async (error: Error | undefined) => {
 		if (closed) {
 			logger.trace({ trace: error?.stack }, 'connection already closed')
@@ -637,6 +644,8 @@ export const makeSocket = (config: SocketConfig) => {
 
 		clearInterval(keepAliveReq)
 		clearTimeout(qrTimer)
+		clearTimeout(offlineEndFallbackTimer)
+		offlineEndTasks.length = 0
 
 		ws.removeAllListeners('close')
 		ws.removeAllListeners('open')
@@ -935,20 +944,48 @@ export const makeSocket = (config: SocketConfig) => {
 			void end(error)
 		}
 	})
+	// B5: passive post-connect tasks wait for the offline backlog to be delivered (WAWebPassiveModeManager /
+	// waitForOfflineDeliveryEnd), with WA Web's DEFAULT_MAX_PASSIVE_MODE_TIME_MS (60s) as the fallback.
+	const runOfflineEndTasks = () => {
+		offlineDeliveryEnded = true
+		for (const task of offlineEndTasks.splice(0)) {
+			Promise.resolve()
+				.then(task)
+				.catch(err => logger.warn({ err }, 'offline-end task failed'))
+		}
+	}
+
+	const afterOfflineDeliveryEnd = (task: () => Promise<void> | void, fallbackMs = PASSIVE_TASK_FALLBACK_MS) => {
+		offlineEndTasks.push(task)
+		if (offlineDeliveryEnded) {
+			return runOfflineEndTasks()
+		}
+
+		clearTimeout(offlineEndFallbackTimer)
+		offlineEndFallbackTimer = setTimeout(runOfflineEndTasks, fallbackMs)
+		offlineEndFallbackTimer.unref?.()
+	}
+
 	// login complete
 	ws.on('CB:success', async (node: BinaryNode) => {
 		try {
 			updateServerTimeOffset(node)
-			await uploadPreKeysToServerIfRequired()
-			// BE#687 M1: WA Web sends <active/> ONLY after a passive connect (to end passive mode
-			// once a receipt/message backlog is flushed). We connect passive:false, so an unconditional
-			// <active/> is a passive:false+<active/> combination WA Web never produces — drop it.
-
-			// After successful login, validate our key-bundle against server
-			try {
-				await digestKeyBundle()
-			} catch (e) {
-				logger.warn({ e }, 'failed to run digest after login')
+			// B5 (WA Web parity): no unconditional prekey-count / digest IQ at login. WA Web uploads at login only
+			// when the server has no prekeys yet (passive task "KeyUpload", gated on offline-delivery-end) and is
+			// otherwise driven by the server's encrypt notifications (<count> / <digest>), handled in messages-recv.
+			// BE#687 M1: WA Web sends <active/> ONLY after a passive connect; we connect passive:false, so an
+			// unconditional <active/> is a combination WA Web never produces — dropped.
+			const { exists: currentPreKeyExists } = await verifyCurrentPreKeyExists()
+			const decision = decideLoginPreKeyCheck({
+				serverHasPreKeys: authState.creds.serverHasPreKeys,
+				nextPreKeyId: authState.creds.nextPreKeyId,
+				currentPreKeyExists
+			})
+			if (decision.check) {
+				logger.info({ reason: decision.reason }, 'login prekey check required; deferring until offline delivery end')
+				afterOfflineDeliveryEnd(() => uploadPreKeysToServerIfRequired())
+			} else {
+				logger.debug('login prekey check skipped (server-driven, WA Web parity)')
 			}
 		} catch (err) {
 			logger.warn({ err }, 'failed to send initial passive iq')
@@ -1058,6 +1095,7 @@ export const makeSocket = (config: SocketConfig) => {
 		}
 
 		ev.emit('connection.update', { receivedPendingNotifications: true })
+		runOfflineEndTasks()
 	})
 
 	// update credentials when required

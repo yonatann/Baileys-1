@@ -6,7 +6,7 @@ import { proto } from '../../WAProto/index.js'
 import {
 	DEFAULT_CACHE_TTLS,
 	KEY_BUNDLE_TYPE,
-	MIN_PREKEY_COUNT,
+	INITIAL_PREKEY_COUNT,
 	PLACEHOLDER_MAX_AGE_SECONDS,
 	STATUS_EXPIRY_SECONDS
 } from '../Defaults'
@@ -58,6 +58,7 @@ import {
 	xmppPreKey,
 	xmppSignedPreKey
 } from '../Utils'
+import { classifyServerEncryptNotification, runPreKeyLow } from '../Utils/login-traffic-policy'
 import { makeMutex } from '../Utils/make-mutex'
 import { makeOfflineNodeProcessor, type MessageType } from '../Utils/offline-node-processor'
 import { buildAckStanza } from '../Utils/stanza-ack'
@@ -135,6 +136,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		relayMessage,
 		sendReceipt,
 		uploadPreKeys,
+		digestKeyBundle,
 		sendPeerDataOperationMessage,
 		getUSyncDevices,
 		messageRetryManager,
@@ -769,23 +771,30 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		const from = node.attrs.from
 		if (from === S_WHATSAPP_NET) {
 			const stanzaId = node.attrs.id
-			if (stanzaId && inFlightPreKeyLow.has(stanzaId)) {
+			const kind = classifyServerEncryptNotification(node)
+			if (kind === 'digest') {
+				// WA Web parity (B5, WAWebHandleDigestKey): the digest is server-requested, not a login poll.
+				try {
+					await digestKeyBundle()
+				} catch (e) {
+					logger.warn({ e }, 'failed to run server-requested key digest')
+				}
+
 				return
 			}
 
-			const countChild = getBinaryNodeChild(node, 'count')
-			const count = +countChild!.attrs.value!
-			const shouldUploadMorePreKeys = count < MIN_PREKEY_COUNT
-
-			logger.debug({ count, shouldUploadMorePreKeys }, 'recv pre-key count')
-			if (shouldUploadMorePreKeys) {
-				if (stanzaId) inFlightPreKeyLow.add(stanzaId)
-				try {
-					await uploadPreKeys()
-				} finally {
-					if (stanzaId) inFlightPreKeyLow.delete(stanzaId)
-				}
+			if (kind !== 'prekey_low') {
+				logger.debug({ node }, 'ignoring server encrypt notification without <count>/<digest>')
+				return
 			}
+
+			logger.debug({ count: getBinaryNodeChild(node, 'count')?.attrs.value }, 'recv pre-key low notification')
+			await runPreKeyLow({
+				stanzaId,
+				inFlight: inFlightPreKeyLow,
+				upload: uploadPreKeys,
+				count: INITIAL_PREKEY_COUNT
+			})
 		} else {
 			const result = await handleIdentityChange(node, {
 				meId: authState.creds.me?.id,
@@ -1178,7 +1187,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				// link_code_companion_reg notifications during pairing. Only stage=primary_hello carries the
 				// primary keys; an interleaved stage=refresh_code has only link_code_pairing_ref. Processing it
 				// blindly hit toRequiredBuffer(undefined) -> "Invalid buffer" and pairing never completed.
-				if(linkCodeCompanionReg?.attrs?.stage !== 'primary_hello') {
+				if (linkCodeCompanionReg?.attrs?.stage !== 'primary_hello') {
 					break
 				}
 				const ref = toRequiredBuffer(getBinaryNodeChildBuffer(linkCodeCompanionReg, 'link_code_pairing_ref'))
