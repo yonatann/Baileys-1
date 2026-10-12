@@ -1023,6 +1023,28 @@ export function getAggregateResponsesInEventMessage(
 	return Object.values(responseMap)
 }
 
+/**
+ * Receipt `type` for an incoming (not-from-me, non-peer) message's delivery receipt.
+ * WA Web (WAWebSendDeliveryReceiptJob: `isActiveReceipt = !response.hasInactiveMsg`) sends a TYPELESS
+ * delivery receipt for ordinary chat content and `type="inactive"` only when the processed content is a
+ * non-activity kind (WAWebHandleMsgProcess.processMsgs `hasInactiveMsg`: addons/reactions, keep-in-chat,
+ * history bundle/notice). It does NOT depend on app focus / online state.
+ */
+export const getDeliveryReceiptType = (message: proto.IMessage | null | undefined): 'inactive' | undefined => {
+	const content = normalizeMessageContent(message)
+	if (
+		content?.reactionMessage ||
+		content?.encReactionMessage ||
+		content?.keepInChatMessage ||
+		content?.messageHistoryBundle ||
+		content?.messageHistoryNotice
+	) {
+		return 'inactive'
+	}
+
+	return undefined
+}
+
 /** Given a list of message keys, aggregates them by chat & sender. Useful for sending read receipts in bulk */
 export const aggregateMessageKeysNotFromMe = (keys: WAMessageKey[]) => {
 	const keyMap: { [id: string]: { jid: string; participant: string | undefined; messageIds: string[] } } = {}

@@ -38,6 +38,7 @@ import {
 	extractAddressingContext,
 	extractE2ESessionFromRetryReceipt,
 	getCallStatusFromNode,
+	getDeliveryReceiptType,
 	getHistoryMsg,
 	getNextPreKeys,
 	getStatusFromReceiptType,
@@ -163,7 +164,6 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	// Debounce identity-change session refreshes per JID to avoid bursts
 	const identityAssertDebounce = new NodeCache<boolean>({ stdTTL: 5, useClones: false })
 
-	let sendActiveReceipts = false
 
 	const fetchMessageHistory = async (
 		count: number,
@@ -1804,8 +1804,9 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 							if (isLidUser(msg.key.remoteJid!) || isLidUser(msg.key.remoteJidAlt)) {
 								participant = author // TODO: investigate sending receipts to LIDs and not PNs
 							}
-						} else if (!sendActiveReceipts) {
-							type = 'inactive'
+						} else {
+							// WA Web parity: typeless unless the content is a non-activity kind (not tied to online state)
+							type = getDeliveryReceiptType(msg.message)
 						}
 
 						acked = true
@@ -2107,11 +2108,6 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	const inFlight463Recoveries = new Set<string>()
 
 	ev.on('connection.update', ({ isOnline, connection }) => {
-		if (typeof isOnline !== 'undefined') {
-			sendActiveReceipts = isOnline
-			logger.trace(`sendActiveReceipts set to "${sendActiveReceipts}"`)
-		}
-
 		// Flush pending tctoken index save on disconnect to avoid writing after close
 		if (connection === 'close' && tcTokenIndexTimer) {
 			clearTimeout(tcTokenIndexTimer)
@@ -2147,7 +2143,6 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		}
 
 		identityAssertDebounce.close()
-		sendActiveReceipts = false
 	})
 
 	async function pruneExpiredTcTokens() {
