@@ -51,6 +51,8 @@ export type AuthenticationCreds = SignalCreds & {
 	advSecretKey: string
 
 	me?: Contact
+	/** Account NCT salt (WA `WAWebNctSalt`): from initial history sync `nctSalt` or the nct_salt_sync action. */
+	nctSalt?: Buffer
 	account?: proto.IADVSignedDeviceIdentity
 	signalIdentities?: SignalIdentity[]
 	myAppStateKeyId?: string

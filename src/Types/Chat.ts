@@ -47,6 +47,8 @@ export type BotListInfo = {
 export type ChatMutation = {
 	syncAction: proto.ISyncActionData
 	index: string[]
+	/** syncd operation of the record; only consumed by operation-sensitive actions (NctSaltSync). */
+	operation?: proto.SyncdMutation.SyncdOperation
 }
 
 export type WAPatchCreate = {

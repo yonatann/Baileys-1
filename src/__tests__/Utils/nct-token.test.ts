@@ -41,9 +41,16 @@ describe('genCsTokenNode (WAWebSendMsgCreateFanoutStanza genCsTokenBody, b07@694
 		expect(genCsTokenNode({ ...base, enabled: false })).toBeUndefined()
 	})
 
-	it('is absent when no NCT salt is stored', () => {
+	it('is absent when no NCT salt is stored (WA null-check only, b06 genCsTokenBody n==null)', () => {
 		expect(genCsTokenNode({ ...base, salt: undefined })).toBeUndefined()
-		expect(genCsTokenNode({ ...base, salt: Buffer.alloc(0) })).toBeUndefined()
+	})
+
+	it('an empty stored salt still yields a token, as WA does (decodeB64("") is a valid HMAC key)', () => {
+		const node = genCsTokenNode({ ...base, salt: Buffer.alloc(0) })
+		// independently computed: python hmac.new(b'', b'123456789@lid', sha256)
+		expect((node!.content as Buffer).toString('hex')).toBe(
+			'9d9a12e1de8ef27b13b31e4cf75057dcf409d7cc8e6fdd4d92223d8e3046f3c5'
+		)
 	})
 
 	it('is absent for non-regular-user chats (group, PSA, bot)', () => {

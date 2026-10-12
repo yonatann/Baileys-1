@@ -405,6 +405,15 @@ const processMessage = async (
 							.catch(err => logger?.warn({ err }, 'failed to store LID-PN mappings from history sync'))
 					}
 
+					// WA stores the NCT salt only on the initial-bootstrap path (handleInitialSyncMsgs, b07@3212946)
+					if (
+						data.syncType === proto.HistorySync.HistorySyncType.INITIAL_BOOTSTRAP &&
+						data.nctSalt !== null &&
+						data.nctSalt !== undefined
+					) {
+						ev.emit('creds.update', { nctSalt: Buffer.from(data.nctSalt) })
+					}
+
 					await storeTcTokensFromHistorySync(data.chats, signalRepository, keyStore, logger)
 
 					ev.emit('messaging-history.set', {

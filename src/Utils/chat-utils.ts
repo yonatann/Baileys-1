@@ -26,6 +26,7 @@ import type { ILogger } from './logger'
 import { LT_HASH_ANTI_TAMPERING } from './lt-hash'
 import { downloadContentFromMessage } from './messages-media'
 import { emitSyncActionResults, processContactAction } from './sync-action-utils'
+import { applyNctSaltSyncAction } from './nct-token-utils'
 
 type FetchAppStateSyncKey = (keyId: string) => Promise<proto.Message.IAppStateSyncKeyData | null | undefined>
 
@@ -285,7 +286,7 @@ export const decodeSyncdMutations = async (
 		}
 
 		const indexStr = Buffer.from(syncAction.index!).toString()
-		onMutation({ syncAction, index: JSON.parse(indexStr) })
+		onMutation({ syncAction, index: JSON.parse(indexStr), operation: operation! })
 
 		ltGenerator.mix({
 			indexMac: record.index!.blob!,
@@ -967,6 +968,19 @@ export const processSyncAction = (
 		})
 	} else if (action?.localeSetting?.locale) {
 		ev.emit('settings.update', { setting: 'locale', value: action.localeSetting.locale })
+	} else if (action?.nctSaltSyncAction || type === 'nct_salt_sync') {
+		// WAWebNctSaltSync (b12@1500354): stores the account NCT salt used to derive cstoken.
+		const result = applyNctSaltSyncAction(
+			syncAction.operation ?? proto.SyncdMutation.SyncdOperation.SET,
+			action?.nctSaltSyncAction
+		)
+		if (result.kind === 'set') {
+			ev.emit('creds.update', { nctSalt: result.salt })
+		} else if (result.kind === 'remove') {
+			ev.emit('creds.update', { nctSalt: undefined })
+		} else {
+			logger?.warn('[nct-salt-sync] Missing salt in nctSaltSyncAction')
+		}
 	} else if (action?.timeFormatAction) {
 		ev.emit('settings.update', { setting: 'timeFormat', value: action.timeFormatAction })
 	} else if (action?.pnForLidChatAction) {

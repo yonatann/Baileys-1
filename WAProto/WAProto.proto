@@ -1843,6 +1843,7 @@ message HistorySync {
     repeated PhoneNumberToLIDMapping phoneNumberToLidMappings = 15;
     optional string companionMetaNonce = 16;
     optional bytes shareableChatIdentifierEncryptionKey = 17;
+    optional bytes nctSalt = 19;
     repeated Account accounts = 18;
     enum BotAIWaitListState {
         IN_WAITLIST = 0;
@@ -4493,6 +4494,7 @@ message SyncActionValue {
     optional MarketingMessageBroadcastAction marketingMessageBroadcastAction = 39;
     optional ExternalWebBetaAction externalWebBetaAction = 40;
     optional PrivacySettingRelayAllCalls privacySettingRelayAllCalls = 41;
+    optional NctSaltSyncAction nctSaltSyncAction = 80;
     optional CallLogAction callLogAction = 42;
     optional UGCBot ugcBot = 43;
     optional StatusPrivacyAction statusPrivacy = 44;
@@ -4828,6 +4830,10 @@ message SyncActionValue {
 
     message PrivacySettingRelayAllCalls {
         optional bool isEnabled = 1;
+    }
+
+    message NctSaltSyncAction {
+        optional bytes salt = 1;
     }
 
     message PrivateProcessingSettingAction {

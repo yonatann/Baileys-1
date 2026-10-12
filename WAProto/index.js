@@ -30983,6 +30983,7 @@ export const proto = $root.proto = (() => {
         HistorySync.prototype.phoneNumberToLidMappings = $util.emptyArray;
         HistorySync.prototype.companionMetaNonce = null;
         HistorySync.prototype.shareableChatIdentifierEncryptionKey = null;
+        HistorySync.prototype.nctSalt = null;
         HistorySync.prototype.accounts = $util.emptyArray;
 
         let $oneOfFields;
@@ -31032,6 +31033,12 @@ export const proto = $root.proto = (() => {
         // Virtual OneOf for proto3 optional field
         Object.defineProperty(HistorySync.prototype, "_shareableChatIdentifierEncryptionKey", {
             get: $util.oneOfGetter($oneOfFields = ["shareableChatIdentifierEncryptionKey"]),
+            set: $util.oneOfSetter($oneOfFields)
+        });
+
+        // Virtual OneOf for proto3 optional field
+        Object.defineProperty(HistorySync.prototype, "_nctSalt", {
+            get: $util.oneOfGetter($oneOfFields = ["nctSalt"]),
             set: $util.oneOfSetter($oneOfFields)
         });
 
@@ -31088,6 +31095,8 @@ export const proto = $root.proto = (() => {
                 w.uint32(130).string(m.companionMetaNonce);
             if (m.shareableChatIdentifierEncryptionKey != null && Object.hasOwnProperty.call(m, "shareableChatIdentifierEncryptionKey"))
                 w.uint32(138).bytes(m.shareableChatIdentifierEncryptionKey);
+            if (m.nctSalt != null && Object.hasOwnProperty.call(m, "nctSalt"))
+                w.uint32(154).bytes(m.nctSalt);
             if (m.accounts != null && m.accounts.length) {
                 for (var i = 0; i < m.accounts.length; ++i)
                     $root.proto.Account.encode(m.accounts[i], w.uint32(146).fork()).ldelim();
@@ -31180,6 +31189,10 @@ export const proto = $root.proto = (() => {
                     }
                 case 17: {
                         m.shareableChatIdentifierEncryptionKey = r.bytes();
+                        break;
+                    }
+                case 19: {
+                        m.nctSalt = r.bytes();
                         break;
                     }
                 case 18: {
@@ -31351,6 +31364,12 @@ export const proto = $root.proto = (() => {
                 else if (d.shareableChatIdentifierEncryptionKey.length >= 0)
                     m.shareableChatIdentifierEncryptionKey = d.shareableChatIdentifierEncryptionKey;
             }
+            if (d.nctSalt != null) {
+                if (typeof d.nctSalt === "string")
+                    $util.base64.decode(d.nctSalt, m.nctSalt = $util.newBuffer($util.base64.length(d.nctSalt)), 0);
+                else if (d.nctSalt.length >= 0)
+                    m.nctSalt = d.nctSalt;
+            }
             if (d.accounts) {
                 if (!Array.isArray(d.accounts))
                     throw TypeError(".proto.HistorySync.accounts: array expected");
@@ -31465,6 +31484,11 @@ export const proto = $root.proto = (() => {
                 d.shareableChatIdentifierEncryptionKey = o.bytes === String ? $util.base64.encode(m.shareableChatIdentifierEncryptionKey, 0, m.shareableChatIdentifierEncryptionKey.length) : o.bytes === Array ? Array.prototype.slice.call(m.shareableChatIdentifierEncryptionKey) : m.shareableChatIdentifierEncryptionKey;
                 if (o.oneofs)
                     d._shareableChatIdentifierEncryptionKey = "shareableChatIdentifierEncryptionKey";
+            }
+            if (m.nctSalt != null && m.hasOwnProperty("nctSalt")) {
+                d.nctSalt = o.bytes === String ? $util.base64.encode(m.nctSalt, 0, m.nctSalt.length) : o.bytes === Array ? Array.prototype.slice.call(m.nctSalt) : m.nctSalt;
+                if (o.oneofs)
+                    d._nctSalt = "nctSalt";
             }
             if (m.accounts && m.accounts.length) {
                 d.accounts = [];
@@ -79651,6 +79675,7 @@ export const proto = $root.proto = (() => {
         SyncActionValue.prototype.marketingMessageBroadcastAction = null;
         SyncActionValue.prototype.externalWebBetaAction = null;
         SyncActionValue.prototype.privacySettingRelayAllCalls = null;
+        SyncActionValue.prototype.nctSaltSyncAction = null;
         SyncActionValue.prototype.callLogAction = null;
         SyncActionValue.prototype.ugcBot = null;
         SyncActionValue.prototype.statusPrivacy = null;
@@ -79895,6 +79920,13 @@ export const proto = $root.proto = (() => {
         // Virtual OneOf for proto3 optional field
         Object.defineProperty(SyncActionValue.prototype, "_privacySettingRelayAllCalls", {
             get: $util.oneOfGetter($oneOfFields = ["privacySettingRelayAllCalls"]),
+            set: $util.oneOfSetter($oneOfFields)
+        });
+
+
+        // Virtual OneOf for proto3 optional field
+        Object.defineProperty(SyncActionValue.prototype, "_nctSaltSyncAction", {
+            get: $util.oneOfGetter($oneOfFields = ["nctSaltSyncAction"]),
             set: $util.oneOfSetter($oneOfFields)
         });
 
@@ -80179,6 +80211,8 @@ export const proto = $root.proto = (() => {
                 $root.proto.SyncActionValue.ExternalWebBetaAction.encode(m.externalWebBetaAction, w.uint32(322).fork()).ldelim();
             if (m.privacySettingRelayAllCalls != null && Object.hasOwnProperty.call(m, "privacySettingRelayAllCalls"))
                 $root.proto.SyncActionValue.PrivacySettingRelayAllCalls.encode(m.privacySettingRelayAllCalls, w.uint32(330).fork()).ldelim();
+            if (m.nctSaltSyncAction != null && Object.hasOwnProperty.call(m, "nctSaltSyncAction"))
+                $root.proto.SyncActionValue.NctSaltSyncAction.encode(m.nctSaltSyncAction, w.uint32(642).fork()).ldelim();
             if (m.callLogAction != null && Object.hasOwnProperty.call(m, "callLogAction"))
                 $root.proto.SyncActionValue.CallLogAction.encode(m.callLogAction, w.uint32(338).fork()).ldelim();
             if (m.ugcBot != null && Object.hasOwnProperty.call(m, "ugcBot"))
@@ -80397,6 +80431,10 @@ export const proto = $root.proto = (() => {
                     }
                 case 41: {
                         m.privacySettingRelayAllCalls = $root.proto.SyncActionValue.PrivacySettingRelayAllCalls.decode(r, r.uint32());
+                        break;
+                    }
+                case 80: {
+                        m.nctSaltSyncAction = $root.proto.SyncActionValue.NctSaltSyncAction.decode(r, r.uint32());
                         break;
                     }
                 case 42: {
@@ -80726,6 +80764,11 @@ export const proto = $root.proto = (() => {
                 if (typeof d.privacySettingRelayAllCalls !== "object")
                     throw TypeError(".proto.SyncActionValue.privacySettingRelayAllCalls: object expected");
                 m.privacySettingRelayAllCalls = $root.proto.SyncActionValue.PrivacySettingRelayAllCalls.fromObject(d.privacySettingRelayAllCalls);
+            }
+            if (d.nctSaltSyncAction != null) {
+                if (typeof d.nctSaltSyncAction !== "object")
+                    throw TypeError(".proto.SyncActionValue.nctSaltSyncAction: object expected");
+                m.nctSaltSyncAction = $root.proto.SyncActionValue.NctSaltSyncAction.fromObject(d.nctSaltSyncAction);
             }
             if (d.callLogAction != null) {
                 if (typeof d.callLogAction !== "object")
@@ -81081,6 +81124,11 @@ export const proto = $root.proto = (() => {
                 d.privacySettingRelayAllCalls = $root.proto.SyncActionValue.PrivacySettingRelayAllCalls.toObject(m.privacySettingRelayAllCalls, o);
                 if (o.oneofs)
                     d._privacySettingRelayAllCalls = "privacySettingRelayAllCalls";
+            }
+            if (m.nctSaltSyncAction != null && m.hasOwnProperty("nctSaltSyncAction")) {
+                d.nctSaltSyncAction = $root.proto.SyncActionValue.NctSaltSyncAction.toObject(m.nctSaltSyncAction, o);
+                if (o.oneofs)
+                    d._nctSaltSyncAction = "nctSaltSyncAction";
             }
             if (m.callLogAction != null && m.hasOwnProperty("callLogAction")) {
                 d.callLogAction = $root.proto.SyncActionValue.CallLogAction.toObject(m.callLogAction, o);
@@ -87208,6 +87256,97 @@ export const proto = $root.proto = (() => {
             };
 
             return PrivacySettingRelayAllCalls;
+        })();
+
+        SyncActionValue.NctSaltSyncAction = (function() {
+
+            function NctSaltSyncAction(p) {
+                if (p)
+                    for (var ks = Object.keys(p), i = 0; i < ks.length; ++i)
+                        if (p[ks[i]] != null)
+                            this[ks[i]] = p[ks[i]];
+            }
+
+            NctSaltSyncAction.prototype.salt = null;
+
+            let $oneOfFields;
+
+            // Virtual OneOf for proto3 optional field
+            Object.defineProperty(NctSaltSyncAction.prototype, "_salt", {
+                get: $util.oneOfGetter($oneOfFields = ["salt"]),
+                set: $util.oneOfSetter($oneOfFields)
+            });
+
+            NctSaltSyncAction.create = function create(properties) {
+                return new NctSaltSyncAction(properties);
+            };
+
+            NctSaltSyncAction.encode = function encode(m, w) {
+                if (!w)
+                    w = $Writer.create();
+                if (m.salt != null && Object.hasOwnProperty.call(m, "salt"))
+                    w.uint32(10).bytes(m.salt);
+                return w;
+            };
+
+            NctSaltSyncAction.decode = function decode(r, l, e) {
+                if (!(r instanceof $Reader))
+                    r = $Reader.create(r);
+                var c = l === undefined ? r.len : r.pos + l, m = new $root.proto.SyncActionValue.NctSaltSyncAction();
+                while (r.pos < c) {
+                    var t = r.uint32();
+                    if (t === e)
+                        break;
+                    switch (t >>> 3) {
+                    case 1: {
+                            m.salt = r.bytes();
+                            break;
+                        }
+                    default:
+                        r.skipType(t & 7);
+                        break;
+                    }
+                }
+                return m;
+            };
+
+            NctSaltSyncAction.fromObject = function fromObject(d) {
+                if (d instanceof $root.proto.SyncActionValue.NctSaltSyncAction)
+                    return d;
+                var m = new $root.proto.SyncActionValue.NctSaltSyncAction();
+                if (d.salt != null) {
+                    if (typeof d.salt === "string")
+                        $util.base64.decode(d.salt, m.salt = $util.newBuffer($util.base64.length(d.salt)), 0);
+                    else if (d.salt.length >= 0)
+                        m.salt = d.salt;
+                }
+                return m;
+            };
+
+            NctSaltSyncAction.toObject = function toObject(m, o) {
+                if (!o)
+                    o = {};
+                var d = {};
+                if (m.salt != null && m.hasOwnProperty("salt")) {
+                    d.salt = o.bytes === String ? $util.base64.encode(m.salt, 0, m.salt.length) : o.bytes === Array ? Array.prototype.slice.call(m.salt) : m.salt;
+                    if (o.oneofs)
+                        d._salt = "salt";
+                }
+                return d;
+            };
+
+            NctSaltSyncAction.prototype.toJSON = function toJSON() {
+                return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+            };
+
+            NctSaltSyncAction.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/proto.SyncActionValue.NctSaltSyncAction";
+            };
+
+            return NctSaltSyncAction;
         })();
 
         SyncActionValue.PrivateProcessingSettingAction = (function() {

@@ -4531,6 +4531,7 @@ export namespace proto {
         phoneNumberToLidMappings?: (proto.IPhoneNumberToLIDMapping[]|null);
         companionMetaNonce?: (string|null);
         shareableChatIdentifierEncryptionKey?: (Uint8Array|null);
+        nctSalt?: (Uint8Array|null);
         accounts?: (proto.IAccount[]|null);
     }
 
@@ -4552,6 +4553,7 @@ export namespace proto {
         public phoneNumberToLidMappings: proto.IPhoneNumberToLIDMapping[];
         public companionMetaNonce?: (string|null);
         public shareableChatIdentifierEncryptionKey?: (Uint8Array|null);
+        public nctSalt?: (Uint8Array|null);
         public accounts: proto.IAccount[];
         public static create(properties?: proto.IHistorySync): proto.HistorySync;
         public static encode(m: proto.IHistorySync, w?: $protobuf.Writer): $protobuf.Writer;
@@ -11460,6 +11462,7 @@ export namespace proto {
         marketingMessageBroadcastAction?: (proto.SyncActionValue.IMarketingMessageBroadcastAction|null);
         externalWebBetaAction?: (proto.SyncActionValue.IExternalWebBetaAction|null);
         privacySettingRelayAllCalls?: (proto.SyncActionValue.IPrivacySettingRelayAllCalls|null);
+        nctSaltSyncAction?: (proto.SyncActionValue.INctSaltSyncAction|null);
         callLogAction?: (proto.SyncActionValue.ICallLogAction|null);
         ugcBot?: (proto.SyncActionValue.IUGCBot|null);
         statusPrivacy?: (proto.SyncActionValue.IStatusPrivacyAction|null);
@@ -11533,6 +11536,7 @@ export namespace proto {
         public marketingMessageBroadcastAction?: (proto.SyncActionValue.IMarketingMessageBroadcastAction|null);
         public externalWebBetaAction?: (proto.SyncActionValue.IExternalWebBetaAction|null);
         public privacySettingRelayAllCalls?: (proto.SyncActionValue.IPrivacySettingRelayAllCalls|null);
+        public nctSaltSyncAction?: (proto.SyncActionValue.INctSaltSyncAction|null);
         public callLogAction?: (proto.SyncActionValue.ICallLogAction|null);
         public ugcBot?: (proto.SyncActionValue.IUGCBot|null);
         public statusPrivacy?: (proto.SyncActionValue.IStatusPrivacyAction|null);
@@ -12598,6 +12602,22 @@ export namespace proto {
             public static decode(r: ($protobuf.Reader|Uint8Array), l?: number): proto.SyncActionValue.PrivacySettingRelayAllCalls;
             public static fromObject(d: { [k: string]: any }): proto.SyncActionValue.PrivacySettingRelayAllCalls;
             public static toObject(m: proto.SyncActionValue.PrivacySettingRelayAllCalls, o?: $protobuf.IConversionOptions): { [k: string]: any };
+            public toJSON(): { [k: string]: any };
+            public static getTypeUrl(typeUrlPrefix?: string): string;
+        }
+
+        interface INctSaltSyncAction {
+            salt?: (Uint8Array|null);
+        }
+
+        class NctSaltSyncAction implements INctSaltSyncAction {
+            constructor(p?: proto.SyncActionValue.INctSaltSyncAction);
+            public salt?: (Uint8Array|null);
+            public static create(properties?: proto.SyncActionValue.INctSaltSyncAction): proto.SyncActionValue.NctSaltSyncAction;
+            public static encode(m: proto.SyncActionValue.INctSaltSyncAction, w?: $protobuf.Writer): $protobuf.Writer;
+            public static decode(r: ($protobuf.Reader|Uint8Array), l?: number): proto.SyncActionValue.NctSaltSyncAction;
+            public static fromObject(d: { [k: string]: any }): proto.SyncActionValue.NctSaltSyncAction;
+            public static toObject(m: proto.SyncActionValue.NctSaltSyncAction, o?: $protobuf.IConversionOptions): { [k: string]: any };
             public toJSON(): { [k: string]: any };
             public static getTypeUrl(typeUrlPrefix?: string): string;
         }

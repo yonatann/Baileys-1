@@ -47,6 +47,7 @@ import {
 } from '../Utils'
 import { makeMutex } from '../Utils/make-mutex'
 import processMessage from '../Utils/process-message'
+import { isNctTokenSendEnabled } from '../Utils/nct-token-utils'
 import { buildTcTokenFromJid } from '../Utils/tc-token-utils'
 import {
 	type BinaryNode,
@@ -99,7 +100,9 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		/** AB prop 9666: gate tctoken on profile picture IQs. WA Web default: true. */
 		profilePicPrivacyToken: true,
 		/** AB prop 14303: issue tctokens to LID instead of PN. WA Web default: false. */
-		lidTrustedTokenIssueToLid: false
+		lidTrustedTokenIssueToLid: false,
+		/** AB prop 24941 (wa_nct_token_send_enabled): gate cstoken on 1:1 sends. WA Web default: false. */
+		nctTokenSendEnabled: false
 	}
 
 	let syncState: SyncState = SyncState.Connecting
@@ -1022,6 +1025,8 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		if (lidIssueProp !== undefined) {
 			serverProps.lidTrustedTokenIssueToLid = lidIssueProp === 'true' || lidIssueProp === '1'
 		}
+
+		serverProps.nctTokenSendEnabled = isNctTokenSendEnabled(props)
 
 		logger.debug({ serverProps }, 'fetched props')
 
