@@ -46,6 +46,15 @@ type ProcessMessageContext = {
 	options: RequestInit
 	signalRepository: SignalRepositoryWithLIDStore
 	getMessage: SocketConfig['getMessage']
+	/**
+	 * Called once a history-sync chunk was downloaded, decoded and handed to `messaging-history.set`.
+	 * WA Web sends the `hist_sync` completion receipt only at this point (b07@572936), never on receive,
+	 * never for chunks that were skipped or failed. Errors thrown here are swallowed (logged).
+	 */
+	onHistorySyncStored?: (
+		notification: proto.Message.IHistorySyncNotification,
+		message: WAMessage
+	) => Promise<void> | void
 }
 
 const REAL_MSG_STUB_TYPES = new Set([
@@ -301,7 +310,8 @@ const processMessage = async (
 		keyStore,
 		logger,
 		options,
-		getMessage
+		getMessage,
+		onHistorySyncStored
 	}: ProcessMessageContext
 ) => {
 	const meId = creds.me!.id
@@ -413,6 +423,13 @@ const processMessage = async (
 						chunkOrder: histNotification.chunkOrder,
 						peerDataRequestSessionId: histNotification.peerDataRequestSessionId
 					})
+
+					// chunk fully handled -> now (and only now) the phone may be told it was applied (WA Web b07@572936)
+					try {
+						await onHistorySyncStored?.(histNotification, message)
+					} catch (err) {
+						logger?.warn({ err, id: message.key.id }, 'onHistorySyncStored callback failed')
+					}
 				}
 
 				break

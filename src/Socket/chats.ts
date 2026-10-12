@@ -1193,7 +1193,8 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		await Promise.all([fetchProps(), fetchBlocklist(), fetchPrivacySettings()])
 	}
 
-	const upsertMessage = ev.createBufferedFunction(async (msg: WAMessage, type: MessageUpsertType) => {
+	type UpsertHooks = Pick<Parameters<typeof processMessage>[1], 'onHistorySyncStored'>
+	const upsertMessage = ev.createBufferedFunction(async (msg: WAMessage, type: MessageUpsertType, h?: UpsertHooks) => {
 		ev.emit('messages.upsert', { messages: [msg], type })
 
 		if (!!msg.pushName) {
@@ -1316,7 +1317,8 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				keyStore: authState.keys,
 				logger,
 				options: config.options,
-				getMessage
+				getMessage,
+				onHistorySyncStored: h?.onHistorySyncStored
 			})
 		])
 

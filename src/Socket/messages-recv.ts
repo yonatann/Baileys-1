@@ -38,7 +38,6 @@ import {
 	extractAddressingContext,
 	extractE2ESessionFromRetryReceipt,
 	getCallStatusFromNode,
-	getHistoryMsg,
 	getNextPreKeys,
 	getStatusFromReceiptType,
 	collectServerSyncCollectionNames,
@@ -51,6 +50,7 @@ import {
 	NACK_REASONS,
 	NO_MESSAGE_FOUND_ERROR_TEXT,
 	SERVER_ERROR_CODES,
+	shouldSendHistorySyncReceipt,
 	toNumber,
 	unixTimestampSeconds,
 	xmppPreKey,
@@ -1170,7 +1170,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				// link_code_companion_reg notifications during pairing. Only stage=primary_hello carries the
 				// primary keys; an interleaved stage=refresh_code has only link_code_pairing_ref. Processing it
 				// blindly hit toRequiredBuffer(undefined) -> "Invalid buffer" and pairing never completed.
-				if(linkCodeCompanionReg?.attrs?.stage !== 'primary_hello') {
+				if (linkCodeCompanionReg?.attrs?.stage !== 'primary_hello') {
 					break
 				}
 				const ref = toRequiredBuffer(getBinaryNodeChildBuffer(linkCodeCompanionReg, 'link_code_pairing_ref'))
@@ -1811,12 +1811,9 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						acked = true
 						await sendReceipt(msg.key.remoteJid!, participant!, [msg.key.id!], type)
 
-						// send ack for history message
-						const isAnyHistoryMsg = getHistoryMsg(msg.message!)
-						if (isAnyHistoryMsg) {
-							const jid = jidNormalizedUser(msg.key.remoteJid!)
-							await sendReceipt(jid, undefined, [msg.key.id!], 'hist_sync') // TODO: investigate
-						}
+						// hist_sync completion receipt: WA Web sends it only AFTER the chunk was downloaded + stored
+						// (b07@572936, WAWebHandleHistorySyncChunk), never on receive and never for skipped/failed chunks
+						// or INITIAL_STATUS_V3. It is sent from the onHistorySyncStored hook below.
 					} else {
 						acked = true
 						await sendMessageAck(node)
@@ -1826,7 +1823,15 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 				cleanMessage(msg, authState.creds.me!.id, authState.creds.me!.lid!)
 
-				await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify')
+				await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify', {
+					onHistorySyncStored: async notification => {
+						if (!shouldSendHistorySyncReceipt(notification.syncType)) {
+							return
+						}
+
+						await sendReceipt(jidNormalizedUser(msg.key.remoteJid!), undefined, [msg.key.id!], 'hist_sync')
+					}
+				})
 			})
 		} catch (error) {
 			logger.error({ error, node: binaryNodeToString(node) }, 'error in handling message')

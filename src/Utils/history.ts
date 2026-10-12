@@ -160,3 +160,11 @@ export const getHistoryMsg = (message: proto.IMessage) => {
 
 	return anyHistoryMsg
 }
+
+/**
+ * WA Web parity (b07@572936, WAWebHandleHistorySyncChunk): the `hist_sync` completion receipt is skipped for
+ * INITIAL_STATUS_V3 chunks (`e.syncType!==INITIAL_STATUS_V3&&sendAggregateReceipts({type:HISTORY_SYNC_COMPLETION})`),
+ * and is only sent once the chunk was downloaded + decoded successfully.
+ */
+export const shouldSendHistorySyncReceipt = (syncType: number | null | undefined) =>
+	syncType !== proto.HistorySync.HistorySyncType.INITIAL_STATUS_V3
