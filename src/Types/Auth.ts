@@ -84,6 +84,7 @@ export type AuthenticationCreds = SignalCreds & {
 		privacyTokenOn1to1?: boolean
 		profilePicPrivacyToken?: boolean
 		lidTrustedTokenIssueToLid?: boolean
+		usernameDisplayedEnabled?: boolean
 	}
 	/** WA Web parity (B7): ms epoch of the pairing-bootstrap blocklist fetch (later changes arrive as pushes). */
 	blocklistSyncedAt?: number
