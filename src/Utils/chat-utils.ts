@@ -202,6 +202,30 @@ export const isAppStateSyncIrrecoverable = (error: any, attempts: number): boole
 	return attempts >= MAX_SYNC_ATTEMPTS || error?.name === 'TypeError'
 }
 
+/**
+ * Splits a resync request by the retry gate. `bypass` (explicit user writes such as appPatch, which must
+ * fetch the latest state before encoding) runs everything: a silent no-op there would send a patch on stale state.
+ */
+export const partitionByRetryGate = <T extends string>(
+	requested: readonly T[],
+	gate: AppStateRetryGate,
+	now: number,
+	bypass = false
+): { run: T[]; deferred: { name: T; remainingMs: number }[] } => {
+	const run: T[] = []
+	const deferred: { name: T; remainingMs: number }[] = []
+	for (const name of requested) {
+		const remainingMs = bypass ? 0 : gate.remainingMs(name, now)
+		if (remainingMs > 0) {
+			deferred.push({ name, remainingMs })
+		} else {
+			run.push(name)
+		}
+	}
+
+	return { run, deferred }
+}
+
 export const encodeSyncdPatch = async (
 	{ type, index, syncAction, apiVersion, operation }: WAPatchCreate,
 	myAppStateKeyId: string,

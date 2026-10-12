@@ -46,6 +46,7 @@ import {
 	isMissingKeyError,
 	MAX_SYNC_ATTEMPTS,
 	newLTHashState,
+	partitionByRetryGate,
 	processSyncAction
 } from '../Utils'
 import { makeMutex } from '../Utils/make-mutex'
@@ -136,7 +137,9 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	// WA Web FailingFiniteRetry: a collection whose sync gave up is not re-fetched until its backoff
 	// (1s doubling to 1h, b07@1068624) elapses; one timer retries the cooled-down ones.
 	const appStateRetryGate = new AppStateRetryGate()
-	const gatedCollections = new Set<WAPatchName>()
+	// value = whether the deferred sync was an initial sync (carried to the timer retry)
+	const gatedCollections = new Map<WAPatchName, boolean>()
+	let appStateSocketClosed = false
 	let gatedRetryTimer: NodeJS.Timeout | undefined
 	const APP_STATE_RETRY_TIMER_FLOOR_MS = 1000
 
@@ -563,14 +566,28 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		}
 
 		const now = Date.now()
-		const wait = Math.min(...[...gatedCollections].map(name => appStateRetryGate.remainingMs(name, now)))
+		const wait = Math.min(...[...gatedCollections.keys()].map(name => appStateRetryGate.remainingMs(name, now)))
 		gatedRetryTimer = setTimeout(
 			() => {
 				gatedRetryTimer = undefined
-				const due = [...gatedCollections].filter(name => appStateRetryGate.remainingMs(name, Date.now()) === 0)
-				due.forEach(name => gatedCollections.delete(name))
-				if (due.length) {
-					resyncAppState(due, false).catch(error => onUnexpectedError(error, 'gated collections resync'))
+				const now = Date.now()
+				const due = [...gatedCollections].filter(([name]) => appStateRetryGate.remainingMs(name, now) === 0)
+				for (const isInitial of [true, false]) {
+					const names = due.filter(([, initial]) => initial === isInitial).map(([name]) => name)
+					if (!names.length) {
+						continue
+					}
+
+					names.forEach(name => gatedCollections.delete(name))
+					resyncAppState(names, isInitial).catch(error => {
+						// a thrown query() (timeout) must not drop the collections from tracking
+						if (!appStateSocketClosed) {
+							names.forEach(name => gatedCollections.set(name, isInitial))
+							scheduleGatedRetry()
+						}
+
+						onUnexpectedError(error, 'gated collections resync')
+					})
 				}
 
 				scheduleGatedRetry()
@@ -581,19 +598,20 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	}
 
 	const resyncAppState = ev.createBufferedFunction(
-		async (requested: readonly WAPatchName[], isInitialSync: boolean) => {
-			// skip collections still cooling down after a failed sync (retried by the timer instead)
-			const nowMs = Date.now()
-			const collections = requested.filter(name => {
-				const remaining = appStateRetryGate.remainingMs(name, nowMs)
-				if (remaining > 0) {
-					logger.info({ name, remainingMs: remaining }, `${name} in sync backoff, deferring`)
-					gatedCollections.add(name)
-					return false
-				}
+		async (requested: readonly WAPatchName[], isInitialSync: boolean, opts?: { bypassGate?: boolean }) => {
+			// skip collections still cooling down after a failed sync (retried by the timer instead);
+			// explicit writes (appPatch) bypass the gate: they must fetch before encoding
+			const { run: collections, deferred } = partitionByRetryGate(
+				requested,
+				appStateRetryGate,
+				Date.now(),
+				opts?.bypassGate
+			)
+			for (const { name, remainingMs } of deferred) {
+				logger.info({ name, remainingMs }, `${name} in sync backoff, deferring`)
+				gatedCollections.set(name, gatedCollections.get(name) || isInitialSync)
+			}
 
-				return true
-			})
 			scheduleGatedRetry()
 			if (!collections.length) {
 				return
@@ -625,7 +643,9 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				// collections that failed and need a full snapshot on retry
 				// mirrors WA Web's ErrorFatal -> force snapshot behavior
 				const forceSnapshotCollections = new Set<WAPatchName>()
-				// pause before the next round when a collection failed in this one
+				// pause before the next round when a collection failed in this one. NB: runs inside the
+				// keys.transaction (the whole fetch loop does); moving it out would mean restructuring the loop
+				// into per-round transactions, so the <=1s wait (only after a failure) is accepted here.
 				let retryBackoffMs = 0
 				// keep executing till all collections are done
 				// sometimes a single patch request will not return all the patches (God knows why)
@@ -770,7 +790,6 @@ export const makeChatsSocket = (config: SocketConfig) => {
 								)
 								forceSnapshotCollections.add(name)
 								retryBackoffMs = Math.max(retryBackoffMs, appStateRetryBackoffMs(attemptsMap[name]! - 1))
-								retryBackoffMs = Math.max(retryBackoffMs, appStateRetryBackoffMs(attemptsMap[name]! - 1))
 							} else if (isAppStateSyncIrrecoverable(error, attemptsMap[name])) {
 								const cooldownMs = appStateRetryGate.recordFailure(name, Date.now())
 								logger.warn(
@@ -778,7 +797,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 									`failed to sync ${name} from v${states[name].version}, giving up (retry in ${cooldownMs}ms)`
 								)
 								collectionsToHandle.delete(name)
-								gatedCollections.add(name)
+								gatedCollections.set(name, isInitialSync)
 							} else {
 								logger.info(logData, `failed to sync ${name} from v${states[name].version}, forcing snapshot retry`)
 								// force a full snapshot on retry to recover from
@@ -790,7 +809,9 @@ export const makeChatsSocket = (config: SocketConfig) => {
 					}
 				}
 			}, authState?.creds?.me?.id || 'resync-app-state')
-			scheduleGatedRetry()
+			if (!appStateSocketClosed) {
+				scheduleGatedRetry()
+			}
 
 			const { onMutation } = newAppStateChunkHandler(isInitialSync)
 			for (const key in globalMutationMap) {
@@ -1425,7 +1446,12 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	})
 
 	ev.on('connection.update', ({ connection, receivedPendingNotifications }) => {
+		if (connection === 'open') {
+			appStateSocketClosed = false
+		}
+
 		if (connection === 'close') {
+			appStateSocketClosed = true
 			blockedCollections.clear()
 			clearTimeout(gatedRetryTimer)
 			gatedRetryTimer = undefined

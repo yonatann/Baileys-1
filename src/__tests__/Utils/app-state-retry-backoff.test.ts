@@ -3,6 +3,7 @@ import {
 	APP_STATE_BACKOFF_MAX_MS,
 	APP_STATE_BACKOFF_MIN_MS,
 	AppStateRetryGate,
+	partitionByRetryGate,
 	appStateRetryBackoffMs
 } from '../../Utils/chat-utils'
 
@@ -56,5 +57,29 @@ describe('AppStateRetryGate (cross-call cooldown per collection)', () => {
 		gate.recordSuccess('regular')
 		expect(gate.remainingMs('regular', 0)).toBe(0)
 		expect(gate.recordFailure('regular', 0)).toBe(1000)
+	})
+})
+
+describe('partitionByRetryGate', () => {
+	const cooled = () => {
+		const gate = new AppStateRetryGate()
+		gate.recordFailure('regular', 0)
+		return gate
+	}
+
+	it('defers cooling-down collections and runs the rest', () => {
+		const { run, deferred } = partitionByRetryGate(['regular', 'regular_low'], cooled(), 100)
+		expect(run).toEqual(['regular_low'])
+		expect(deferred).toEqual([{ name: 'regular', remainingMs: 900 }])
+	})
+
+	it('bypass (an explicit appPatch write must always fetch) runs everything and defers nothing', () => {
+		const { run, deferred } = partitionByRetryGate(['regular', 'regular_low'], cooled(), 100, true)
+		expect(run).toEqual(['regular', 'regular_low'])
+		expect(deferred).toEqual([])
+	})
+
+	it('runs a collection once its cooldown has elapsed', () => {
+		expect(partitionByRetryGate(['regular'], cooled(), 1000).run).toEqual(['regular'])
 	})
 })
