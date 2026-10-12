@@ -731,17 +731,22 @@ export const decodePatches = async (
 
 /**
  * WA Web `isUser()` for a chat JID (WAWebWid: server in c.us | lid | bot | hosted | hosted.lid).
+ * Legacy `@c.us` is included alongside `@s.whatsapp.net`, since WA Web treats both as a user server.
  * Everything else (groups, broadcast, status, newsletter) is a non-user chat.
  */
 const isWaUserChat = (jid: string) =>
-	isPnUser(jid) || isLidUser(jid) || isJidMetaAI(jid) || isHostedPnUser(jid) || isHostedLidUser(jid)
+	isPnUser(jid) ||
+	jid.endsWith('@c.us') ||
+	isLidUser(jid) ||
+	isJidMetaAI(jid) ||
+	isHostedPnUser(jid) ||
+	isHostedLidUser(jid)
 
 /**
  * Participant segment of a per-message app-state index (`star`, `deleteMessageForMe`).
  *
- * WA Web evidence (local, gitignored WA Web script cache, module `WAWebSyncdUtils`:
- *   whatsapp-scheduler-backend/wwebjs_auth/69eb58f24c800520ec386f8c/6a1fff6f37d8b7e53482a484/
- *     Default/Service Worker/ScriptCache/f1cdccba37924bda_0, ~byte 3863740):
+ * WA Web evidence (local, gitignored WA Web script cache, module `WAWebSyncdUtils`,
+ * function `extractParticipantForSync`):
  *   function s(e){var t="0";return e.participant&&!e.remote.isUser()&&!e.fromMe&&(t=e.participant.toString({legacy:!0})),t}
  *   function l(e){return[e.remote.toString({legacy:!0}),e.id,e.fromMe?"1":"0",s(e)]}
  * WAWebWid `toString({legacy:true})`: a c.us wid is emitted as `user[:device]@s.whatsapp.net`;
@@ -754,9 +759,17 @@ const isWaUserChat = (jid: string) =>
  * matches on. Only the star path is confirmed in this evidence; the deleteMessageForMe index builder
  * is UNCONFIRMED (the cache holds only its proto/enum), so it is assumed to share this extractor.
  *
+ * Competing candidate for deleteMessageForMe (UNCONFIRMED, not adopted): WAWebSyncdActionUtils.buildMessageKey
+ * builds [remoteJid, id, fromMe ? '1' : '0', participant != null && !fromMe ? participant : '0']. It has no
+ * isUser check (the raw participant is emitted even in a user chat), and an empty-string participant yields ''
+ * rather than '0'. It is a live candidate for the delete path; the delete path remains UNCONFIRMED.
+ *
  * Addressing: no PN<->LID conversion. The key's own PN or LID JID is emitted with its device, and the
  * legacy c.us -> s.whatsapp.net mapping is applied. Example: `5511...:12@s.whatsapp.net` stays as-is.
  * An empty or undecodable participant falls back to '0'.
+ *
+ * Unverified: `jidEncode` here drops the agent suffix (e.g. `123_1@lid` is emitted as `123@lid`). WA Web
+ * evidence for whether the agent segment is kept has not been checked, so behavior is unchanged.
  *
  * A wrong segment never matches the index on the phone, so the mutation is silently dropped.
  */

@@ -63,6 +63,18 @@ describe('per-message app-state index participant segment', () => {
 		it('undecodable participant falls back to 0', () => {
 			expect(star(GROUP, { id: 'M16', fromMe: false, participant: 'not-a-jid' })[4]).toBe('0')
 		})
+		it('empty-string participant falls back to 0', () => {
+			expect(star(GROUP, { id: 'M17', fromMe: false, participant: '' })[4]).toBe('0')
+			expect(del(GROUP, { id: 'M17', fromMe: false, participant: '' })[4]).toBe('0')
+		})
+		it('bot-server sender with a device keeps the device', () => {
+			expect(star(GROUP, { id: 'M18', fromMe: false, participant: '13135550002:5@bot' })[4]).toBe('13135550002:5@bot')
+		})
+		it('hosted-server sender with a device keeps the device', () => {
+			expect(star(GROUP, { id: 'M19', fromMe: false, participant: '5511999999999:4@hosted' })[4]).toBe(
+				'5511999999999:4@hosted'
+			)
+		})
 		it('@broadcast incoming sender carries the sender JID', () => {
 			expect(star(BROADCAST, { id: 'M8', fromMe: false, participant: SENDER })).toEqual([
 				'star',
@@ -94,6 +106,10 @@ describe('per-message app-state index participant segment', () => {
 		})
 		it('1:1 LID chat keeps 0 even if a participant is present', () => {
 			expect(del(SENDER_LID, { id: 'M4', fromMe: false, participant: SENDER })[4]).toBe('0')
+		})
+		it('legacy c.us chat keeps 0 even if a sender participant is present (WA Web isUser covers c.us)', () => {
+			expect(star('5511999999999@c.us', { id: 'M20', fromMe: false, participant: SENDER })[4]).toBe('0')
+			expect(del('5511999999999@c.us', { id: 'M20', fromMe: false, participant: SENDER })[4]).toBe('0')
 		})
 		it('hosted (user) chat keeps 0 (WA Web isUser covers hosted)', () => {
 			expect(star('5511999999999@hosted', { id: 'M12', fromMe: false, participant: SENDER })[4]).toBe('0')
