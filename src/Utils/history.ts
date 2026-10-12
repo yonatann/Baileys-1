@@ -59,7 +59,12 @@ export const downloadHistory = async (
 	try {
 		compressed = await downloadHistoryBytes(msg, options)
 	} catch (err) {
-		await onDownloadFailed?.(err)
+		try {
+			await onDownloadFailed?.(err)
+		} catch {
+			// a failed receipt must not replace the download error the caller needs to see
+		}
+
 		throw err
 	}
 

@@ -404,8 +404,8 @@ const processMessage = async (
 					}
 
 					const data = await downloadAndProcessHistorySyncNotification(histNotification, options, logger, err =>
-							historySyncAcker?.onDownloadFailed(histNotification, message, err)
-						)
+						historySyncAcker?.onDownloadFailed(histNotification, message, err)
+					)
 
 					if (data.lidPnMappings?.length) {
 						logger?.debug({ count: data.lidPnMappings.length }, 'processing LID-PN mappings from history sync')
@@ -423,7 +423,6 @@ const processMessage = async (
 						peerDataRequestSessionId: histNotification.peerDataRequestSessionId,
 						historySyncAck: historySyncAcker?.chunkAck(histNotification, message)
 					})
-
 				}
 
 				break

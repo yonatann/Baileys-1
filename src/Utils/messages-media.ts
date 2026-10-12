@@ -369,8 +369,8 @@ export async function generateThumbnail(
 }
 
 /**
- * Request-stage HTTP failures (fetch threw, or the server answered non-ok) are tagged so the hist_sync error receipt
- * can skip them, as WA Web does for HttpNetworkError (b07@557378). Tagged by identity, so it survives re-wrapping
+ * Request-stage network failures (fetch() itself threw a TypeError) are tagged so the hist_sync error receipt
+ * can skip them, as WA Web maps only TypeError to HttpNetworkError (mmsDownload) and returns early (b07@557378). Tagged by identity, so it survives re-wrapping
  * the same error object and never changes its message.
  */
 const httpNetworkErrors = new WeakSet<object>()
@@ -380,14 +380,26 @@ export const markHttpNetworkError = <T extends object>(err: T): T => {
 	return err
 }
 
-export const isHttpNetworkError = (err: unknown): boolean => typeof err === 'object' && err !== null && httpNetworkErrors.has(err)
+export const isHttpNetworkError = (err: unknown): boolean =>
+	typeof err === 'object' && err !== null && httpNetworkErrors.has(err)
 
 export const getHttpStream = async (url: string | URL, options: RequestInit & { isStream?: true } = {}) => {
-	const response = await fetch(url.toString(), {
-		dispatcher: options.dispatcher,
-		method: 'GET',
-		headers: options.headers as HeadersInit
-	})
+	let response: Response
+	try {
+		response = await fetch(url.toString(), {
+			dispatcher: options.dispatcher,
+			method: 'GET',
+			headers: options.headers as HeadersInit
+		})
+	} catch (err) {
+		// only a failure of the request itself is a network failure; a non-ok status is not (see markHttpNetworkError)
+		if (err instanceof TypeError) {
+			markHttpNetworkError(err)
+		}
+
+		throw err
+	}
+
 	if (!response.ok) {
 		throw new Boom(`Failed to fetch stream from ${url}`, { statusCode: response.status, data: { url } })
 	}
@@ -608,19 +620,10 @@ export const downloadEncryptedContent = async (
 	}
 
 	// download the message
-	let fetched: Readable
-	try {
-		fetched = await getHttpStream(downloadUrl, {
-			...(options || {}),
-			headers
-		})
-	} catch (err) {
-		if (typeof err === 'object' && err !== null) {
-			markHttpNetworkError(err)
-		}
-
-		throw err
-	}
+	const fetched = await getHttpStream(downloadUrl, {
+		...(options || {}),
+		headers
+	})
 
 	let remainingBytes = Buffer.from([])
 
@@ -956,7 +959,7 @@ const getMediaRetryKey = (mediaKey: Buffer | Uint8Array) => {
 
 /**
  * Encrypted `server-error` receipt for a history chunk whose download failed, so the phone re-uploads it
- * (WAWebSendHistSyncServerErrorReceiptJob, b07@548700). Same encoding as the media retry receipt: AES-GCM with the
+ * (WAWebSendHistSyncServerErrorReceiptJob, b07@~550150-550500). Same encoding as the media retry receipt: AES-GCM with the
  * retry key derived from the chunk's mediaKey, AAD = stanza id.
  */
 export const buildHistSyncServerErrorReceiptNode = ({

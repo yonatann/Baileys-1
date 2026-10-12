@@ -7,7 +7,7 @@ import type { WAMessage } from '../../Types'
 import { makeEventBuffer } from '../../Utils/event-buffer'
 import { createHistorySyncAcker, markHttpNetworkError } from '../../Utils/history'
 import { aesDecryptGCM, hkdf } from '../../Utils/crypto'
-import { buildHistSyncServerErrorReceiptNode } from '../../Utils/messages-media'
+import { buildHistSyncServerErrorReceiptNode, getHttpStream, isHttpNetworkError } from '../../Utils/messages-media'
 import processMessage from '../../Utils/process-message'
 
 const ME = '1234@s.whatsapp.net'
@@ -123,13 +123,18 @@ describe('hist_sync receipt policy (WA Web b07)', () => {
 
 		it('SPOOF: a fromMe=false history notification gets NO receipt (WA Web b06@712861 isMeAccount guard)', async () => {
 			const send = jest.fn(async () => {})
-			await makeAcker({ send }).ackOnReceive(makeHistoryMsg(T.INITIAL_STATUS_V3, validPayload(T.INITIAL_STATUS_V3), false))
+			await makeAcker({ send }).ackOnReceive(
+				makeHistoryMsg(T.INITIAL_STATUS_V3, validPayload(T.INITIAL_STATUS_V3), false)
+			)
 			expect(send).not.toHaveBeenCalled()
 		})
 
 		it('a non-history message is a no-op', async () => {
 			const send = jest.fn(async () => {})
-			await makeAcker({ send }).ackOnReceive({ key: { remoteJid: ME, id: 'X', fromMe: true }, message: { conversation: 'hi' } })
+			await makeAcker({ send }).ackOnReceive({
+				key: { remoteJid: ME, id: 'X', fromMe: true },
+				message: { conversation: 'hi' }
+			})
 			expect(send).not.toHaveBeenCalled()
 		})
 	})
@@ -172,7 +177,11 @@ describe('hist_sync receipt policy (WA Web b07)', () => {
 			const serverErr = jest.fn(async () => {})
 			const acker = makeAcker({ serverErr })
 			const err = new Error('decrypt failed')
-			await acker.onDownloadFailed({ syncType: T.RECENT, mediaKey: Buffer.alloc(32, 7) } as any, makeDownloadMsg(T.RECENT), err)
+			await acker.onDownloadFailed(
+				{ syncType: T.RECENT, mediaKey: Buffer.alloc(32, 7) } as any,
+				makeDownloadMsg(T.RECENT),
+				err
+			)
 			expect(serverErr).toHaveBeenCalledTimes(1)
 			expect(serverErr).toHaveBeenCalledWith(ME, 'DL1', Buffer.alloc(32, 7))
 		})
@@ -180,13 +189,21 @@ describe('hist_sync receipt policy (WA Web b07)', () => {
 		it('a network failure (HttpNetworkError) sends NO error receipt (WA Web returns early, b07@557378)', async () => {
 			const serverErr = jest.fn(async () => {})
 			const err = markHttpNetworkError(new Error('Failed to fetch stream'))
-			await makeAcker({ serverErr }).onDownloadFailed({ syncType: T.RECENT, mediaKey: Buffer.alloc(32, 7) } as any, makeDownloadMsg(T.RECENT), err)
+			await makeAcker({ serverErr }).onDownloadFailed(
+				{ syncType: T.RECENT, mediaKey: Buffer.alloc(32, 7) } as any,
+				makeDownloadMsg(T.RECENT),
+				err
+			)
 			expect(serverErr).not.toHaveBeenCalled()
 		})
 
 		it('no mediaKey -> no error receipt (WA Web only has a key while the chunk is still encrypted)', async () => {
 			const serverErr = jest.fn(async () => {})
-			await makeAcker({ serverErr }).onDownloadFailed({ syncType: T.RECENT } as any, makeDownloadMsg(T.RECENT), new Error('x'))
+			await makeAcker({ serverErr }).onDownloadFailed(
+				{ syncType: T.RECENT } as any,
+				makeDownloadMsg(T.RECENT),
+				new Error('x')
+			)
 			expect(serverErr).not.toHaveBeenCalled()
 		})
 	})
@@ -224,7 +241,9 @@ describe('hist_sync receipt policy (WA Web b07)', () => {
 			await expect(
 				processMessage(
 					makeHistoryMsg(T.RECENT, Buffer.from('not-zlib')),
-					makeCtx(true, recordingEv(order), { historySyncAcker: { onDownloadFailed, chunkAck: () => async () => {} } }) as any
+					makeCtx(true, recordingEv(order), {
+						historySyncAcker: { onDownloadFailed, chunkAck: () => async () => {} }
+					}) as any
 				)
 			).rejects.toBeDefined()
 			expect(onDownloadFailed).not.toHaveBeenCalled()
@@ -236,7 +255,9 @@ describe('hist_sync receipt policy (WA Web b07)', () => {
 			await expect(
 				processMessage(
 					makeDownloadMsg(T.RECENT),
-					makeCtx(true, recordingEv(order), { historySyncAcker: { onDownloadFailed, chunkAck: () => async () => {} } }) as any
+					makeCtx(true, recordingEv(order), {
+						historySyncAcker: { onDownloadFailed, chunkAck: () => async () => {} }
+					}) as any
 				)
 			).rejects.toBeDefined()
 			expect(onDownloadFailed).toHaveBeenCalledTimes(1)
@@ -315,5 +336,22 @@ describe('hist_sync receipt policy (WA Web b07)', () => {
 			const s = readFileSync(join(process.cwd(), 'src/Socket/socket.ts'), 'utf8')
 			expect(s).toContain('makeEventBuffer(logger, { awaitHistorySyncStore: config.awaitHistorySyncStore })')
 		})
+	})
+})
+
+describe('getHttpStream network classification (WA Web maps only fetch TypeError to HttpNetworkError)', () => {
+	afterEach(() => jest.restoreAllMocks())
+
+	it('a non-ok response (expired/404/410 chunk URL) is NOT a network failure, so the error receipt is still sent', async () => {
+		jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('gone', { status: 410 }))
+		const err = await getHttpStream('https://example.test/chunk').catch(e => e)
+		expect(err).toBeInstanceOf(Error)
+		expect(isHttpNetworkError(err)).toBe(false)
+	})
+
+	it('a fetch() TypeError IS a network failure (no error receipt)', async () => {
+		jest.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'))
+		const err = await getHttpStream('https://example.test/chunk').catch(e => e)
+		expect(isHttpNetworkError(err)).toBe(true)
 	})
 })
