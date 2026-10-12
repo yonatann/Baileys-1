@@ -42,6 +42,7 @@ import {
 	makeNoiseHandler,
 	promiseTimeout,
 	signedKeyPair,
+	nextPresenceNameOnCredsUpdate,
 	xmppSignedPreKey
 } from '../Utils'
 import {
@@ -1061,13 +1062,14 @@ export const makeSocket = (config: SocketConfig) => {
 
 	// update credentials when required
 	ev.on('creds.update', update => {
-		const name = update.me?.name
-		// if name has just been received
-		if (creds.me?.name !== name) {
+		// B10: only announce when the pushname is actually learned/changed. Previously this
+		// fired (typeless => AVAILABLE) on every creds.update lacking `me`.
+		const name = nextPresenceNameOnCredsUpdate(creds.me?.name, update)
+		if (name) {
 			logger.debug({ name }, 'updated pushName')
 			sendNode({
 				tag: 'presence',
-				attrs: { name: name! }
+				attrs: { name }
 			}).catch(err => {
 				logger.warn({ trace: err.stack }, 'error in sending presence update on name change')
 			})
