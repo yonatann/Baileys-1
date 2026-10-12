@@ -56,27 +56,9 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 				}
 			]
 		})
-		const data: { [_: string]: GroupMetadata } = {}
-		const groupsChild = getBinaryNodeChild(result, 'groups')
-		if (groupsChild) {
-			const groups = getBinaryNodeChildren(groupsChild, 'group')
-			const parsed: GroupMetadata[] = []
-			for (const groupNode of groups) {
-				parsed.push(
-					extractGroupMetadata({
-						tag: 'result',
-						attrs: {},
-						content: [groupNode]
-					})
-				)
-			}
-
-			for (const meta of await resolveTruncatedGroups(parsed, groupMetadata, (jid, err) =>
-				logger.warn({ jid, err }, '[waweb-parity][b8] truncated group re-fetch failed; omitted')
-			)) {
-				data[meta.id] = meta
-			}
-		}
+		const data = await parseParticipatingGroups(result, groupMetadata, (jid, err) =>
+			logger.warn({ jid, err }, '[waweb-parity][b8] truncated group re-fetch failed; omitted')
+		)
 
 		// TODO: properly parse LID / PN DATA
 		sock.ev.emit('groups.update', Object.values(data))
@@ -312,6 +294,26 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 		},
 		groupFetchAllParticipating
 	}
+}
+
+/** Parse a `<groups>` fetch-all result; truncated groups are re-fetched by id (never emitted empty). */
+export const parseParticipatingGroups = async (
+	result: BinaryNode,
+	fetchOne: (jid: string) => Promise<GroupMetadata>,
+	onError?: (jid: string, err: unknown) => void
+) => {
+	const data: { [_: string]: GroupMetadata } = {}
+	const groupsChild = getBinaryNodeChild(result, 'groups')
+	if (groupsChild) {
+		const parsed = getBinaryNodeChildren(groupsChild, 'group').map(groupNode =>
+			extractGroupMetadata({ tag: 'result', attrs: {}, content: [groupNode] })
+		)
+		for (const meta of await resolveTruncatedGroups(parsed, fetchOne, onError)) {
+			data[meta.id] = meta
+		}
+	}
+
+	return data
 }
 
 export const extractGroupMetadata = (result: BinaryNode) => {

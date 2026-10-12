@@ -1,21 +1,40 @@
 import type { GroupMetadata } from '../Types'
 
 /**
- * Share one in-flight call between concurrent callers (the slot clears on settle,
- * success or failure). Used for the fetch-all-participating-groups IQ: the
- * connect-time seed and the `dirty type=groups` handler both fire right after
- * login and would otherwise each send the same IQ.
+ * Coalesce concurrent callers of an idempotent refresh. A caller arriving while a run is in
+ * flight must NOT just join it — the in-flight request was issued before whatever the caller is
+ * reacting to (e.g. `dirty type=groups` then `cleanDirtyBits`), so joining could lose that
+ * change. Instead all mid-flight callers share ONE trailing run that starts after the current one
+ * settles (success or failure). A lone call runs once.
  */
 export const coalesceInflight = <T>(fn: () => Promise<T>): (() => Promise<T>) => {
-	let inflight: Promise<T> | undefined
+	let current: Promise<T> | undefined
+	let trailing: Promise<T> | undefined
+	const start = (): Promise<T> => {
+		const p: Promise<T> = fn().finally(() => {
+			if (current === p) {
+				current = undefined
+			}
+		})
+		current = p
+		return p
+	}
+
 	return () => {
-		if (!inflight) {
-			inflight = fn().finally(() => {
-				inflight = undefined
-			})
+		if (!current) {
+			return start()
 		}
 
-		return inflight
+		if (!trailing) {
+			trailing = current
+				.catch(() => undefined)
+				.then(() => {
+					trailing = undefined
+					return start()
+				})
+		}
+
+		return trailing
 	}
 }
 
@@ -40,7 +59,11 @@ export const resolveTruncatedGroups = async (
 		}
 
 		try {
-			out.push(await fetchOne(g.id))
+			const full = await fetchOne(g.id)
+			// WA Web keeps only `truncated == null` results of the by-id re-query
+			if (!full.truncated) {
+				out.push(full)
+			}
 		} catch (err) {
 			onError?.(g.id, err)
 		}
