@@ -55,6 +55,8 @@ export type AuthenticationCreds = SignalCreds & {
 	signalIdentities?: SignalIdentity[]
 	myAppStateKeyId?: string
 	firstUnuploadedPreKeyId: number
+	/** WA Web parity (B5): false before/while an upload is in flight or failed, true once the server holds our prekeys. undefined = legacy session. */
+	serverHasPreKeys?: boolean
 	nextPreKeyId: number
 
 	lastAccountSyncTimestamp?: number

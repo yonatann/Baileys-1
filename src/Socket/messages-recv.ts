@@ -6,7 +6,7 @@ import { proto } from '../../WAProto/index.js'
 import {
 	DEFAULT_CACHE_TTLS,
 	KEY_BUNDLE_TYPE,
-	MIN_PREKEY_COUNT,
+	INITIAL_PREKEY_COUNT,
 	PLACEHOLDER_MAX_AGE_SECONDS,
 	STATUS_EXPIRY_SECONDS
 } from '../Defaults'
@@ -56,7 +56,7 @@ import {
 	xmppPreKey,
 	xmppSignedPreKey
 } from '../Utils'
-import { classifyServerEncryptNotification } from '../Utils/login-traffic-policy'
+import { classifyServerEncryptNotification, runPreKeyLow } from '../Utils/login-traffic-policy'
 import { makeMutex } from '../Utils/make-mutex'
 import { makeOfflineNodeProcessor, type MessageType } from '../Utils/offline-node-processor'
 import { buildAckStanza } from '../Utils/stanza-ack'
@@ -787,23 +787,13 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				return
 			}
 
-			if (stanzaId && inFlightPreKeyLow.has(stanzaId)) {
-				return
-			}
-
-			const countChild = getBinaryNodeChild(node, 'count')
-			const count = +countChild!.attrs.value!
-			const shouldUploadMorePreKeys = count < MIN_PREKEY_COUNT
-
-			logger.debug({ count, shouldUploadMorePreKeys }, 'recv pre-key count')
-			if (shouldUploadMorePreKeys) {
-				if (stanzaId) inFlightPreKeyLow.add(stanzaId)
-				try {
-					await uploadPreKeys()
-				} finally {
-					if (stanzaId) inFlightPreKeyLow.delete(stanzaId)
-				}
-			}
+			logger.debug({ count: getBinaryNodeChild(node, 'count')?.attrs.value }, 'recv pre-key low notification')
+			await runPreKeyLow({
+				stanzaId,
+				inFlight: inFlightPreKeyLow,
+				upload: uploadPreKeys,
+				count: INITIAL_PREKEY_COUNT
+			})
 		} else {
 			const result = await handleIdentityChange(node, {
 				meId: authState.creds.me?.id,

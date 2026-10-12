@@ -46,7 +46,7 @@ import {
 	signedKeyPair,
 	xmppSignedPreKey
 } from '../Utils'
-import { decideLoginPreKeyCheck } from '../Utils/login-traffic-policy'
+import { decideLoginPreKeyCheck, runKeyDigest, uploadWithServerFlag } from '../Utils/login-traffic-policy'
 import {
 	assertNodeErrorFree,
 	type BinaryNode,
@@ -232,18 +232,16 @@ export const makeSocket = (config: SocketConfig) => {
 	}
 
 	// Validate current key-bundle on server; on failure, trigger pre-key upload and rethrow
-	const digestKeyBundle = async (): Promise<void> => {
-		const res = await query({
-			tag: 'iq',
-			attrs: { to: S_WHATSAPP_NET, type: 'get', xmlns: 'encrypt' },
-			content: [{ tag: 'digest', attrs: {} }]
+	const digestKeyBundle = async (): Promise<void> =>
+		runKeyDigest({
+			queryDigest: () =>
+				query({
+					tag: 'iq',
+					attrs: { to: S_WHATSAPP_NET, type: 'get', xmlns: 'encrypt' },
+					content: [{ tag: 'digest', attrs: {} }]
+				}),
+			upload: () => uploadPreKeys(INITIAL_PREKEY_COUNT)
 		})
-		const digestNode = getBinaryNodeChild(res, 'digest')
-		if (!digestNode) {
-			await uploadPreKeys()
-			throw new Error('encrypt/get digest returned no digest node')
-		}
-	}
 
 	// Rotate our signed pre-key on server; on failure, run digest as fallback and rethrow
 	const rotateSignedPreKey = async (): Promise<void> => {
@@ -532,7 +530,10 @@ export const makeSocket = (config: SocketConfig) => {
 
 		// Add timeout protection
 		uploadPreKeysPromise = Promise.race([
-			uploadLogic(0),
+			uploadWithServerFlag(
+				flag => ev.emit('creds.update', { serverHasPreKeys: flag }),
+				() => uploadLogic(0)
+			),
 			new Promise<void>((_, reject) =>
 				setTimeout(() => reject(new Boom('Pre-key upload timeout', { statusCode: 408 })), UPLOAD_TIMEOUT)
 			)
@@ -582,6 +583,7 @@ export const makeSocket = (config: SocketConfig) => {
 				await uploadPreKeys(count)
 			} else {
 				logger.info(`PreKey validation passed - Server: ${preKeyCount}, Current prekey ${currentPreKeyId} exists`)
+				if (creds.serverHasPreKeys !== true) ev.emit('creds.update', { serverHasPreKeys: true })
 			}
 		} catch (error) {
 			logger.error({ error }, 'Failed to check/upload pre-keys during initialization')
@@ -628,6 +630,9 @@ export const makeSocket = (config: SocketConfig) => {
 		})
 	}
 
+	let offlineDeliveryEnded = false
+	let offlineEndFallbackTimer: ReturnType<typeof setTimeout> | undefined
+	const offlineEndTasks: Array<() => Promise<void> | void> = []
 	const end = async (error: Error | undefined) => {
 		if (closed) {
 			logger.trace({ trace: error?.stack }, 'connection already closed')
@@ -639,6 +644,8 @@ export const makeSocket = (config: SocketConfig) => {
 
 		clearInterval(keepAliveReq)
 		clearTimeout(qrTimer)
+		clearTimeout(offlineEndFallbackTimer)
+		offlineEndTasks.length = 0
 
 		ws.removeAllListeners('close')
 		ws.removeAllListeners('open')
@@ -939,8 +946,6 @@ export const makeSocket = (config: SocketConfig) => {
 	})
 	// B5: passive post-connect tasks wait for the offline backlog to be delivered (WAWebPassiveModeManager /
 	// waitForOfflineDeliveryEnd), with WA Web's DEFAULT_MAX_PASSIVE_MODE_TIME_MS (60s) as the fallback.
-	let offlineDeliveryEnded = false
-	const offlineEndTasks: Array<() => Promise<void> | void> = []
 	const runOfflineEndTasks = () => {
 		offlineDeliveryEnded = true
 		for (const task of offlineEndTasks.splice(0)) {
@@ -956,8 +961,9 @@ export const makeSocket = (config: SocketConfig) => {
 			return runOfflineEndTasks()
 		}
 
-		const t = setTimeout(runOfflineEndTasks, fallbackMs)
-		t.unref?.()
+		clearTimeout(offlineEndFallbackTimer)
+		offlineEndFallbackTimer = setTimeout(runOfflineEndTasks, fallbackMs)
+		offlineEndFallbackTimer.unref?.()
 	}
 
 	// login complete
@@ -971,7 +977,7 @@ export const makeSocket = (config: SocketConfig) => {
 			// unconditional <active/> is a combination WA Web never produces — dropped.
 			const { exists: currentPreKeyExists } = await verifyCurrentPreKeyExists()
 			const decision = decideLoginPreKeyCheck({
-				firstUnuploadedPreKeyId: authState.creds.firstUnuploadedPreKeyId,
+				serverHasPreKeys: authState.creds.serverHasPreKeys,
 				nextPreKeyId: authState.creds.nextPreKeyId,
 				currentPreKeyExists
 			})
