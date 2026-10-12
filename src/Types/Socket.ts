@@ -73,6 +73,13 @@ export type SocketConfig = {
 	auth: AuthenticationState
 	/** manage history processing with this control; by default will sync up everything */
 	shouldSyncHistoryMessage: (msg: proto.Message.IHistorySyncNotification) => boolean
+	/**
+	 * consumer opt-in for durable `hist_sync` receipts. When true, the library does NOT send a chunk's receipt
+	 * when it is received or handed to listeners; instead each `messaging-history.set` carries `historySyncAck`,
+	 * which the consumer calls after it has durably stored the chunk (WA Web acks after its store try-block).
+	 * Default false: the receipt is released right after the buffer hands the chunk to listeners.
+	 */
+	awaitHistorySyncStore?: boolean
 	/** transaction capability options for SignalKeyStore */
 	transactionOpts: TransactionCapabilityOptions
 	/** marks the client as online whenever the socket successfully connects */

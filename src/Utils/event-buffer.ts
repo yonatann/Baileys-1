@@ -66,11 +66,32 @@ type BaileysBufferableEventEmitter = BaileysEventEmitter & {
 	destroy(): void
 }
 
+/** a chunk's `hist_sync` receipt; idempotent (see history.ts `createHistorySyncAcker`) */
+type HistorySyncChunkAck = () => Promise<void>
+
+const runHistorySyncAcks = async (acks: HistorySyncChunkAck[], logger: ILogger) => {
+	for (const ack of acks) {
+		try {
+			await ack()
+		} catch (err) {
+			logger.error({ err }, 'hist_sync receipt failed')
+		}
+	}
+}
+
 /**
  * The event buffer logically consolidates different events into a single event
  * making the data processing more efficient.
+ *
+ * @param awaitHistorySyncStore consumer opt-in. When true, `messaging-history.set` carries a `historySyncAck`
+ * the consumer MUST call once it has durably stored the chunk; the library then never acks on its own.
+ * When false (default), the library releases each chunk's ack right after the buffer hands the batch to
+ * listeners (it does not wait for their persistence). In both modes a destroyed buffer never releases acks.
  */
-export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter => {
+export const makeEventBuffer = (
+	logger: ILogger,
+	{ awaitHistorySyncStore = false }: { awaitHistorySyncStore?: boolean } = {}
+): BaileysBufferableEventEmitter => {
 	const ev = new EventEmitter()
 	const historyCache = new Set<string>()
 
@@ -79,6 +100,8 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 	let bufferTimeout: NodeJS.Timeout | null = null
 	let flushPendingTimeout: NodeJS.Timeout | null = null // Add a specific timer for the debounced flush to prevent leak
 	let bufferCount = 0
+	/** chunk acks of the buffered `messaging-history.set` events (released on flush, dropped on destroy) */
+	let historySyncAcks: HistorySyncChunkAck[] = []
 	const MAX_HISTORY_CACHE_SIZE = 10000 // Limit the history cache size to prevent memory bloat
 	const BUFFER_TIMEOUT_MS = 30000 // 30 seconds
 
@@ -149,8 +172,27 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 		}
 
 		const consolidatedData = consolidateEvents(data)
+		const acks = historySyncAcks
+		historySyncAcks = []
+		if (awaitHistorySyncStore && acks.length) {
+			// consumer opt-in: hand the consumer ONE ack covering every merged chunk; it runs them in arrival order
+			const existing = consolidatedData['messaging-history.set']
+			consolidatedData['messaging-history.set'] = {
+				chats: existing?.chats ?? [],
+				contacts: existing?.contacts ?? [],
+				messages: existing?.messages ?? [],
+				...existing,
+				historySyncAck: () => runHistorySyncAcks(acks, logger)
+			} as BaileysEventMap['messaging-history.set']
+		}
+
 		if (Object.keys(consolidatedData).length) {
 			ev.emit('event', consolidatedData)
+		}
+
+		if (!awaitHistorySyncStore && acks.length) {
+			// fallback: the batch has left the buffer and reached listeners; release the receipts now
+			void runHistorySyncAcks(acks, logger)
 		}
 
 		data = newData
@@ -172,6 +214,17 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 			}
 		},
 		emit<T extends BaileysEvent>(event: BaileysEvent, evData: BaileysEventMap[T]) {
+			// a chunk's receipt rides on its `messaging-history.set`; keep it out of the merged payload
+			let historyAck: HistorySyncChunkAck | undefined
+			let payload = evData
+			if (event === 'messaging-history.set' && (evData as { historySyncAck?: unknown } | undefined)?.historySyncAck) {
+				const { historySyncAck, ...rest } = evData as BaileysEventMap['messaging-history.set'] & {
+					historySyncAck: HistorySyncChunkAck
+				}
+				historyAck = historySyncAck
+				payload = rest as BaileysEventMap[T]
+			}
+
 			// Check if this is a messages.upsert with a different type than what's buffered
 			// If so, flush the buffered messages first to avoid type overshadowing
 			if (event === 'messages.upsert') {
@@ -195,11 +248,26 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 			}
 
 			if (isBuffering && BUFFERABLE_EVENT_SET.has(event)) {
-				append(data, historyCache, event as BufferableEvent, evData, logger)
+				if (historyAck) {
+					historySyncAcks.push(historyAck)
+				}
+
+				append(data, historyCache, event as BufferableEvent, payload, logger)
 				return true
 			}
 
-			return ev.emit('event', { [event]: evData })
+			if (historyAck && awaitHistorySyncStore) {
+				// consumer opt-in: the consumer receives the ack and calls it after its store
+				return ev.emit('event', { [event]: { ...payload, historySyncAck: historyAck } })
+			}
+
+			const emitted = ev.emit('event', { [event]: payload })
+			if (historyAck) {
+				// fallback: listeners have received the chunk; release its receipt
+				void runHistorySyncAcks([historyAck], logger)
+			}
+
+			return emitted
 		},
 		isBuffering() {
 			return isBuffering
@@ -251,8 +319,10 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 
 			// Clear history cache
 			historyCache.clear()
-			// Reset buffer data
+			// Reset buffer data; buffered chunks were never handed to a consumer, so their receipts are dropped
+			// (the phone re-sends them)
 			data = makeBufferData()
+			historySyncAcks = []
 			isBuffering = false
 			bufferCount = 0
 			// Remove all listeners
