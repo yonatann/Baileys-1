@@ -15,6 +15,7 @@ import type {
 	WABusinessProfile,
 	WAMediaUpload,
 	WAMessage,
+	WAMessageKey,
 	WAPatchCreate,
 	WAPatchName,
 	WAPresence,
@@ -1152,9 +1153,11 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	}
 
 	/**
-	 * Star or Unstar a message
+	 * Star or Unstar a message.
+	 * `messages[0]` is the only message indexed (one patch per call). Pass the full key
+	 * (`participant` included) so incoming group/broadcast messages get the sender segment.
 	 */
-	const star = (jid: string, messages: { id: string; fromMe?: boolean }[], star: boolean) => {
+	const star = (jid: string, messages: Pick<WAMessageKey, 'id' | 'fromMe' | 'participant'>[], star: boolean) => {
 		return chatModify(
 			{
 				star: {

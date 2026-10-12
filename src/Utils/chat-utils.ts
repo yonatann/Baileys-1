@@ -19,7 +19,20 @@ import {
 	LabelAssociationType,
 	type MessageLabelAssociation
 } from '../Types/LabelAssociation'
-import { type BinaryNode, getBinaryNodeChild, getBinaryNodeChildren, isJidGroup, jidNormalizedUser } from '../WABinary'
+import {
+	type BinaryNode,
+	getBinaryNodeChild,
+	getBinaryNodeChildren,
+	isHostedLidUser,
+	isHostedPnUser,
+	isJidGroup,
+	isJidMetaAI,
+	isLidUser,
+	isPnUser,
+	jidDecode,
+	jidEncode,
+	jidNormalizedUser
+} from '../WABinary'
 import { aesDecrypt, aesEncrypt, hmacSign } from './crypto'
 import { toNumber } from './generics'
 import type { ILogger } from './logger'
@@ -716,6 +729,64 @@ export const decodePatches = async (
 	return { state: newState, mutationMap }
 }
 
+/**
+ * WA Web `isUser()` for a chat JID (WAWebWid: server in c.us | lid | bot | hosted | hosted.lid).
+ * Legacy `@c.us` is included alongside `@s.whatsapp.net`, since WA Web treats both as a user server.
+ * Everything else (groups, broadcast, status, newsletter) is a non-user chat.
+ */
+const isWaUserChat = (jid: string) =>
+	isPnUser(jid) ||
+	jid.endsWith('@c.us') ||
+	isLidUser(jid) ||
+	isJidMetaAI(jid) ||
+	isHostedPnUser(jid) ||
+	isHostedLidUser(jid)
+
+/**
+ * Participant segment of a per-message app-state index (`star`, `deleteMessageForMe`).
+ *
+ * WA Web evidence (local, gitignored WA Web script cache, module `WAWebSyncdUtils`,
+ * function `extractParticipantForSync`):
+ *   function s(e){var t="0";return e.participant&&!e.remote.isUser()&&!e.fromMe&&(t=e.participant.toString({legacy:!0})),t}
+ *   function l(e){return[e.remote.toString({legacy:!0}),e.id,e.fromMe?"1":"0",s(e)]}
+ * WAWebWid `toString({legacy:true})`: a c.us wid is emitted as `user[:device]@s.whatsapp.net`;
+ * other servers fall through to `_serialized`, which also carries `:device` when nonzero.
+ * So the device is KEPT (only a zero device is omitted).
+ *
+ * Index = [action, chatJid, msgId, fromMe ? '1' : '0', participant]. The participant is the sender
+ * ONLY for an incoming message in a non-user chat; otherwise '0'. The star lookup uses the same
+ * extractor (`WAWebSyncdUtils.constructMsgKeySegmentsFromMsgKey`), so it is the segment the phone
+ * matches on. Only the star path is confirmed in this evidence; the deleteMessageForMe index builder
+ * is UNCONFIRMED (the cache holds only its proto/enum), so it is assumed to share this extractor.
+ *
+ * Competing candidate for deleteMessageForMe (UNCONFIRMED, not adopted): WAWebSyncdActionUtils.buildMessageKey
+ * builds [remoteJid, id, fromMe ? '1' : '0', participant != null && !fromMe ? participant : '0']. It has no
+ * isUser check (the raw participant is emitted even in a user chat), and an empty-string participant yields ''
+ * rather than '0'. It is a live candidate for the delete path; the delete path remains UNCONFIRMED.
+ *
+ * Addressing: no PN<->LID conversion. The key's own PN or LID JID is emitted with its device, and the
+ * legacy c.us -> s.whatsapp.net mapping is applied. Example: `5511...:12@s.whatsapp.net` stays as-is.
+ * An empty or undecodable participant falls back to '0'.
+ *
+ * Unverified: `jidEncode` here drops the agent suffix (e.g. `123_1@lid` is emitted as `123@lid`). WA Web
+ * evidence for whether the agent segment is kept has not been checked, so behavior is unchanged.
+ *
+ * A wrong segment never matches the index on the phone, so the mutation is silently dropped.
+ */
+const messageIndexParticipant = (chatJid: string, key: { fromMe?: boolean | null; participant?: string | null }) => {
+	if (!key.participant || key.fromMe || isWaUserChat(chatJid)) {
+		return '0'
+	}
+
+	const decoded = jidDecode(key.participant)
+	if (!decoded?.user) {
+		return '0'
+	}
+
+	const server = decoded.server === 'c.us' ? 's.whatsapp.net' : decoded.server
+	return jidEncode(decoded.user, server, decoded.device) || '0'
+}
+
 export const chatModificationToAppPatch = (mod: ChatModification, jid: string) => {
 	const OP = proto.SyncdMutation.SyncdOperation
 	const getMessageRange = (lastMessages: LastMessageList) => {
@@ -802,7 +873,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 					messageTimestamp: timestamp
 				}
 			},
-			index: ['deleteMessageForMe', jid, key.id!, key.fromMe ? '1' : '0', '0'],
+			index: ['deleteMessageForMe', jid, key.id!, key.fromMe ? '1' : '0', messageIndexParticipant(jid, key)],
 			type: 'regular_high',
 			apiVersion: 3,
 			operation: OP.SET
@@ -859,7 +930,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 					starred: !!mod.star.star
 				}
 			},
-			index: ['star', jid, key.id, key.fromMe ? '1' : '0', '0'],
+			index: ['star', jid, key.id!, key.fromMe ? '1' : '0', messageIndexParticipant(jid, key)],
 			type: 'regular_low',
 			apiVersion: 2,
 			operation: OP.SET
@@ -1085,11 +1156,10 @@ export const processSyncAction = (
 		if (accountSettings) {
 			accountSettings.unarchiveChats = unarchiveChats
 		}
-	} else if (action?.starAction || type === 'star') {
-		let starred = action?.starAction?.starred
-		if (typeof starred !== 'boolean') {
-			starred = syncAction.index[syncAction.index.length - 1] === '1'
-		}
+	} else if (action?.starAction) {
+		// The star state lives only in starAction.starred. The index's last segment is the
+		// sender participant (or '0'), not a starred flag, so there is no index fallback.
+		const starred = !!action.starAction.starred
 
 		ev.emit('messages.update', [
 			{
