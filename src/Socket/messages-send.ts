@@ -1137,7 +1137,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			} else if (is1on1Send && !tcTokenBuffer?.length) {
 				// WA: `Ie = tctoken ?? cstoken` (WAWebSendMsgCreateFanoutStanza b07@692946). cstoken is
 				// only attached when no valid tctoken exists; gated by AB 24941 (default off). Retries
-				// are excluded with the tctoken above (see PR body: WA attaches both on resends).
+				// are excluded with the tctoken above (see PR body: WA's Ie line has no resend guard).
 				const accountLid = sock.serverProps.nctTokenSendEnabled
 					? await resolveAccountLid(destinationJid, getLIDForPN)
 					: undefined

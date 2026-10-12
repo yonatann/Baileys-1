@@ -84,6 +84,9 @@ describe('resolveAccountLid (stand-in for WA chat.accountLid, which the fork lac
 	it('maps a PN destination through the LID mapping store', async () => {
 		await expect(resolveAccountLid('972500000000@s.whatsapp.net', async () => LID)).resolves.toBe(LID)
 	})
+	it('never returns a non-LID value from the store, even if the store returns a PN', async () => {
+		await expect(resolveAccountLid('972500000000@s.whatsapp.net', async () => '972500000000@s.whatsapp.net')).resolves.toBeUndefined()
+	})
 	it('returns undefined for an unmapped PN, never the PN itself (WA null)', async () => {
 		await expect(resolveAccountLid('972500000000@s.whatsapp.net', async () => null)).resolves.toBeUndefined()
 	})

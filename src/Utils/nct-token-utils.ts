@@ -48,7 +48,8 @@ export async function resolveAccountLid(
 	getLIDForPN: (pn: string) => Promise<string | null>
 ): Promise<string | undefined> {
 	if (isLidUser(jid)) return jid
-	return (await getLIDForPN(jid)) ?? undefined
+	const lid = await getLIDForPN(jid)
+	return lid && isLidUser(lid) ? lid : undefined
 }
 
 export type NctSaltSyncResult =
