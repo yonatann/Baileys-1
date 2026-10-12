@@ -53,6 +53,7 @@ import {
 	NACK_REASONS,
 	dispatchAccountSyncDirtyProtocols,
 	NO_MESSAGE_FOUND_ERROR_TEXT,
+	buildHistorySyncOnDemandRequest,
 	SERVER_ERROR_CODES,
 	toNumber,
 	unixTimestampSeconds,
@@ -172,20 +173,20 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	const fetchMessageHistory = async (
 		count: number,
 		oldestMsgKey: WAMessageKey,
-		oldestMsgTimestamp: number | Long
+		oldestMsgTimestamp: number | Long,
+		supportInlineResponse?: boolean
 	): Promise<string> => {
 		if (!authState.creds.me?.id) {
 			throw new Boom('Not authenticated')
 		}
 
 		const pdoMessage: proto.Message.IPeerDataOperationRequestMessage = {
-			historySyncOnDemandRequest: {
-				chatJid: oldestMsgKey.remoteJid,
-				oldestMsgFromMe: oldestMsgKey.fromMe,
-				oldestMsgId: oldestMsgKey.id,
-				oldestMsgTimestampMs: oldestMsgTimestamp,
-				onDemandMsgCount: count
-			},
+			historySyncOnDemandRequest: buildHistorySyncOnDemandRequest({
+				count,
+				oldestMsgKey,
+				oldestMsgTimestamp,
+				supportInlineResponse
+			}),
 			peerDataOperationRequestType: proto.Message.PeerDataOperationRequestType.HISTORY_SYNC_ON_DEMAND
 		}
 
