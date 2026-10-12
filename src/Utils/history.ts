@@ -191,8 +191,9 @@ export const buildHistorySyncOnDemandRequest = ({
 
 /**
  * Stanza attrs for a peer-data-operation message. WA Web sets `privacy_sensitive` to
- * PrivacySensitiveType.OnDemand (=1, b07@647234) for HISTORY_SYNC_ON_DEMAND only (b07@779113 `F(e)`,
- * unless justknob 4199); stanza attr emitted at b07@655635.
+ * PrivacySensitiveType.OnDemand (=1, b07@647234) for HISTORY_SYNC_ON_DEMAND only (decision fn `F(e)` at b07@789796,
+ * called from sendPeerDataOperationRequest b07@779113; WA Web skips it when justknob 4199 is on - we ignore that
+ * kill-switch); stanza attr emitted at b07@655635.
  */
 export const getPeerDataOperationStanzaAttrs = (
 	requestType: proto.Message.PeerDataOperationRequestType | null | undefined
