@@ -52,14 +52,14 @@ const pairSuccessStanza = (deviceIdentityBytes: Buffer, clientProps?: Buffer): B
 	}
 }
 
-const propsBytes = (p: { isChatDbLidMigrated?: boolean }) =>
+const propsBytes = (p: { isChatDbLidMigrated?: boolean; isSyncdPureLidSession?: boolean }) =>
 	Buffer.from(proto.ClientPairingProps.encode(p).finish())
 
 const runPairSuccess = async (clientProps?: Buffer) => {
 	const { state, clear } = await makeSession()
 	const identity = buildIdentity()
 	state.creds.advSecretKey = identity.advSecretKey
-	state.creds.signedIdentityKey = identity.signedIdentityKey
+	;(state.creds as any).signedIdentityKey = identity.signedIdentityKey
 	// The socket is not really connected in unit tests: stub the wire send (captured by makeSocket) and report open,
 	// so the handler's reply goes through and only the handler's own logic decides whether the connection ends.
 	jest.spyOn(WebSocketClient.prototype as any, 'send').mockImplementation(((_d: unknown, cb?: (err?: Error) => void) => cb?.()) as any)
