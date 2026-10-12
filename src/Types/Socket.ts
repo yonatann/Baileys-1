@@ -34,7 +34,7 @@ export type SocketConfig = {
 	/** the WS url to connect to WA */
 	waWebSocketUrl: string | URL
 	/**
-	 * WA Web parity (FR2): client-side gatekeeper inputs. Default (absent) = all false, the unmigrated companion behaviour.
+	 * WA Web parity (FR2): client-side gatekeeper inputs. Default (absent) = false (U-2: companion value of gkx 10314 unverified).
 	 * isGuest mirrors Environment.isGuest (gkx 10314); it feeds usernameDisplayedEnabled() only.
 	 */
 	gatekeepers?: { isGuest?: boolean }

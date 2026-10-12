@@ -1,9 +1,8 @@
 /**
  * WA Web parity (FR2): AB prop `username_contact_display`, config code 4746 (bool, default true).
  * Evidence: WAWebABPropsConfigs (b09.js ~@311516) `username_contact_display:[4746,"bool",!0,!0]`;
- * WAWebUsernameGatingUtils (b06.js module @3755282; getter e() @3755434) `usernameDisplayedEnabled()` = getABPropConfigValue("username_contact_display") || isGuest.
- * usernameDisplayedEnabled() = this prop term OR the isGuest input (WA: `getABPropConfigValue(...) || Environment.isGuest`,
- * isGuest = gkx 10314). The isGuest input comes from SocketConfig.gatekeepers.isGuest and defaults to false (U-2: the
+ * WAWebUsernameGatingUtils (b06.js module @3755282; getter e() @3755434): usernameDisplayedEnabled() = prop term OR isGuest
+ * (Environment.isGuest, gkx 10314). The isGuest input comes from SocketConfig.gatekeepers.isGuest and defaults to false (U-2: the
  * companion-client value of gkx 10314 is not verifiable from the bundle). The value is display-only and does NOT
  * participate in the LID-migration gate (WAIsAccountLidFieldMigrated).
  */
