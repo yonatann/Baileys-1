@@ -11,6 +11,7 @@ import {
 	NOISE_WA_HEADER,
 	PROCESSABLE_HISTORY_TYPES,
 	TimeMs,
+	PASSIVE_TASK_FALLBACK_MS,
 	UPLOAD_TIMEOUT
 } from '../Defaults'
 import {
@@ -45,6 +46,7 @@ import {
 	signedKeyPair,
 	xmppSignedPreKey
 } from '../Utils'
+import { decideLoginPreKeyCheck } from '../Utils/login-traffic-policy'
 import {
 	assertNodeErrorFree,
 	type BinaryNode,
@@ -935,20 +937,49 @@ export const makeSocket = (config: SocketConfig) => {
 			void end(error)
 		}
 	})
+	// B5: passive post-connect tasks wait for the offline backlog to be delivered (WAWebPassiveModeManager /
+	// waitForOfflineDeliveryEnd), with WA Web's DEFAULT_MAX_PASSIVE_MODE_TIME_MS (60s) as the fallback.
+	let offlineDeliveryEnded = false
+	const offlineEndTasks: Array<() => Promise<void> | void> = []
+	const runOfflineEndTasks = () => {
+		offlineDeliveryEnded = true
+		for (const task of offlineEndTasks.splice(0)) {
+			Promise.resolve()
+				.then(task)
+				.catch(err => logger.warn({ err }, 'offline-end task failed'))
+		}
+	}
+
+	const afterOfflineDeliveryEnd = (task: () => Promise<void> | void, fallbackMs = PASSIVE_TASK_FALLBACK_MS) => {
+		offlineEndTasks.push(task)
+		if (offlineDeliveryEnded) {
+			return runOfflineEndTasks()
+		}
+
+		const t = setTimeout(runOfflineEndTasks, fallbackMs)
+		t.unref?.()
+	}
+
 	// login complete
 	ws.on('CB:success', async (node: BinaryNode) => {
 		try {
 			updateServerTimeOffset(node)
-			await uploadPreKeysToServerIfRequired()
-			// BE#687 M1: WA Web sends <active/> ONLY after a passive connect (to end passive mode
-			// once a receipt/message backlog is flushed). We connect passive:false, so an unconditional
-			// <active/> is a passive:false+<active/> combination WA Web never produces — drop it.
-
-			// After successful login, validate our key-bundle against server
-			try {
-				await digestKeyBundle()
-			} catch (e) {
-				logger.warn({ e }, 'failed to run digest after login')
+			// B5 (WA Web parity): no unconditional prekey-count / digest IQ at login. WA Web uploads at login only
+			// when the server has no prekeys yet (passive task "KeyUpload", gated on offline-delivery-end) and is
+			// otherwise driven by the server's encrypt notifications (<count> / <digest>), handled in messages-recv.
+			// BE#687 M1: WA Web sends <active/> ONLY after a passive connect; we connect passive:false, so an
+			// unconditional <active/> is a combination WA Web never produces — dropped.
+			const { exists: currentPreKeyExists } = await verifyCurrentPreKeyExists()
+			const decision = decideLoginPreKeyCheck({
+				firstUnuploadedPreKeyId: authState.creds.firstUnuploadedPreKeyId,
+				nextPreKeyId: authState.creds.nextPreKeyId,
+				currentPreKeyExists
+			})
+			if (decision.check) {
+				logger.info({ reason: decision.reason }, 'login prekey check required; deferring until offline delivery end')
+				afterOfflineDeliveryEnd(() => uploadPreKeysToServerIfRequired())
+			} else {
+				logger.debug('login prekey check skipped (server-driven, WA Web parity)')
 			}
 		} catch (err) {
 			logger.warn({ err }, 'failed to send initial passive iq')
@@ -1058,6 +1089,7 @@ export const makeSocket = (config: SocketConfig) => {
 		}
 
 		ev.emit('connection.update', { receivedPendingNotifications: true })
+		runOfflineEndTasks()
 	})
 
 	// update credentials when required

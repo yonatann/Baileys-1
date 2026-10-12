@@ -56,6 +56,7 @@ import {
 	xmppPreKey,
 	xmppSignedPreKey
 } from '../Utils'
+import { classifyServerEncryptNotification } from '../Utils/login-traffic-policy'
 import { makeMutex } from '../Utils/make-mutex'
 import { makeOfflineNodeProcessor, type MessageType } from '../Utils/offline-node-processor'
 import { buildAckStanza } from '../Utils/stanza-ack'
@@ -133,6 +134,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		relayMessage,
 		sendReceipt,
 		uploadPreKeys,
+		digestKeyBundle,
 		sendPeerDataOperationMessage,
 		getUSyncDevices,
 		messageRetryManager,
@@ -768,6 +770,23 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		const from = node.attrs.from
 		if (from === S_WHATSAPP_NET) {
 			const stanzaId = node.attrs.id
+			const kind = classifyServerEncryptNotification(node)
+			if (kind === 'digest') {
+				// WA Web parity (B5, WAWebHandleDigestKey): the digest is server-requested, not a login poll.
+				try {
+					await digestKeyBundle()
+				} catch (e) {
+					logger.warn({ e }, 'failed to run server-requested key digest')
+				}
+
+				return
+			}
+
+			if (kind !== 'prekey_low') {
+				logger.debug({ node }, 'ignoring server encrypt notification without <count>/<digest>')
+				return
+			}
+
 			if (stanzaId && inFlightPreKeyLow.has(stanzaId)) {
 				return
 			}
@@ -1170,7 +1189,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				// link_code_companion_reg notifications during pairing. Only stage=primary_hello carries the
 				// primary keys; an interleaved stage=refresh_code has only link_code_pairing_ref. Processing it
 				// blindly hit toRequiredBuffer(undefined) -> "Invalid buffer" and pairing never completed.
-				if(linkCodeCompanionReg?.attrs?.stage !== 'primary_hello') {
+				if (linkCodeCompanionReg?.attrs?.stage !== 'primary_hello') {
 					break
 				}
 				const ref = toRequiredBuffer(getBinaryNodeChildBuffer(linkCodeCompanionReg, 'link_code_pairing_ref'))
