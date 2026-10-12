@@ -8,6 +8,7 @@ import {
 	KEY_BUNDLE_TYPE,
 	MIN_PREKEY_COUNT,
 	PLACEHOLDER_MAX_AGE_SECONDS,
+	PROCESSABLE_HISTORY_TYPES,
 	STATUS_EXPIRY_SECONDS
 } from '../Defaults'
 import type {
@@ -50,7 +51,7 @@ import {
 	NACK_REASONS,
 	NO_MESSAGE_FOUND_ERROR_TEXT,
 	SERVER_ERROR_CODES,
-	shouldSendHistorySyncReceipt,
+	createHistorySyncAcker,
 	toNumber,
 	unixTimestampSeconds,
 	xmppPreKey,
@@ -1170,7 +1171,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				// link_code_companion_reg notifications during pairing. Only stage=primary_hello carries the
 				// primary keys; an interleaved stage=refresh_code has only link_code_pairing_ref. Processing it
 				// blindly hit toRequiredBuffer(undefined) -> "Invalid buffer" and pairing never completed.
-				if (linkCodeCompanionReg?.attrs?.stage !== 'primary_hello') {
+				if(linkCodeCompanionReg?.attrs?.stage !== 'primary_hello') {
 					break
 				}
 				const ref = toRequiredBuffer(getBinaryNodeChildBuffer(linkCodeCompanionReg, 'link_code_pairing_ref'))
@@ -1636,6 +1637,15 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		}
 	}
 
+	// same predicate chats.ts uses to decide whether a history chunk is processed
+	const historyAcker = createHistorySyncAcker({
+		isProcessable: n =>
+			config.shouldSyncHistoryMessage(n) &&
+			PROCESSABLE_HISTORY_TYPES.includes(n.syncType! as proto.HistorySync.HistorySyncType),
+		sendHistSyncReceipt: msg =>
+			sendReceipt(jidNormalizedUser(msg.key.remoteJid!), undefined, [msg.key.id!], 'hist_sync')
+	})
+
 	const handleMessage = async (node: BinaryNode) => {
 		const encNode = getBinaryNodeChild(node, 'enc')
 		// TODO: temporary fix for crashes and issues resulting of failed msmsg decryption
@@ -1811,9 +1821,8 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						acked = true
 						await sendReceipt(msg.key.remoteJid!, participant!, [msg.key.id!], type)
 
-						// hist_sync completion receipt: WA Web sends it only AFTER the chunk was downloaded + stored
-						// (b07@572936, WAWebHandleHistorySyncChunk), never on receive and never for skipped/failed chunks
-						// or INITIAL_STATUS_V3. It is sent from the onHistorySyncStored hook below.
+						// hist_sync: V3 + not-processed chunks are acked here; processed chunks after store (see createHistorySyncAcker)
+						await historyAcker.ackOnReceive(msg)
 					} else {
 						acked = true
 						await sendMessageAck(node)
@@ -1824,13 +1833,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				cleanMessage(msg, authState.creds.me!.id, authState.creds.me!.lid!)
 
 				await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify', {
-					onHistorySyncStored: async notification => {
-						if (!shouldSendHistorySyncReceipt(notification.syncType)) {
-							return
-						}
-
-						await sendReceipt(jidNormalizedUser(msg.key.remoteJid!), undefined, [msg.key.id!], 'hist_sync')
-					}
+					onHistorySyncStored: historyAcker.onStored
 				})
 			})
 		} catch (error) {
