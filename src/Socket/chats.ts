@@ -30,6 +30,7 @@ import type { QuickReplyAction } from '../Types/Bussines.js'
 import type { LabelActionBody } from '../Types/Label'
 import { SyncState } from '../Types/State'
 import {
+	buildStarLegacyRemovePatch,
 	chatModificationToAppPatch,
 	type ChatMutationMap,
 	decodePatches,
@@ -1033,9 +1034,35 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	 * lastMessages must be sorted in reverse chronologically
 	 * requires the last messages till the last message received; required for archive & unread
 	 */
-	const chatModify = (mod: ChatModification, jid: string) => {
+	const chatModify = async (mod: ChatModification, jid: string) => {
 		const patch = chatModificationToAppPatch(mod, jid)
-		return appPatch(patch)
+		// Ordering: SET in regular_high FIRST, then REMOVE the legacy regular_low entry.
+		// If the SET fails nothing changed (the call rejects, low untouched). If the REMOVE fails
+		// after the SET succeeded, the user's (un)star took effect and the stale low entry is
+		// exactly the pre-existing state (retried on the next star/unstar of that message), so we
+		// warn instead of failing. The reverse order could drop the star entirely on a failed SET.
+		await appPatch(patch)
+		if (patch.type === 'regular_high' && patch.index[0] === 'star') {
+			try {
+				const myAppStateKeyId = authState.creds.myAppStateKeyId
+				if (myAppStateKeyId) {
+					// Local stored state only (no resync): if regular_low was never synced/loaded
+					// the map is empty and there is nothing to clean up.
+					const { regular_low: lowState } = await authState.keys.get('app-state-sync-version', ['regular_low'])
+					const removePatch = await buildStarLegacyRemovePatch(
+						patch,
+						myAppStateKeyId,
+						lowState ? ensureLTHashStateVersion(lowState) : undefined,
+						getAppStateSyncKey
+					)
+					if (removePatch) {
+						await appPatch(removePatch)
+					}
+				}
+			} catch (error) {
+				logger.warn({ trace: (error as Error)?.stack }, 'failed to remove legacy regular_low star entry')
+			}
+		}
 	}
 
 	/**

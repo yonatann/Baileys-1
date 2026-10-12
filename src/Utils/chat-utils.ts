@@ -219,10 +219,59 @@ export const encodeSyncdPatch = async (
 		]
 	}
 
-	const base64Index = indexMac.toString('base64')
-	state.indexValueMap[base64Index] = { valueMac }
+	// The LTHash generator already applied the op to indexValueMap (SET adds, REMOVE deletes).
+	// Re-adding here on REMOVE would leave a ghost index that desyncs the stored state.
+	if (operation === proto.SyncdMutation.SyncdOperation.SET) {
+		state.indexValueMap[indexMac.toString('base64')] = { valueMac }
+	}
 
 	return { patch, state }
+}
+
+/**
+ * Old Baileys wrote star mutations into regular_low; WA Web (WAWebStarMessageSync,
+ * b10@791524) uses regular_high. WA Web's sync store is keyed by index alone with no
+ * cross-collection timestamp arbitration (store get b07@1055100; 'index-in-wrong-collection'
+ * warning b06@2904468; WAWebSyncdResolveConflict b07@1373210 only compares against pending
+ * same-collection mutations; star apply is unconditional b10@790813-796388), so a stale
+ * regular_low star can override a newer regular_high (un)star on replay.
+ *
+ * If the stored regular_low LTHash state still holds this star's index (indexValueMap is keyed
+ * by base64 indexMac), returns a REMOVE for it in regular_low; otherwise undefined (including
+ * when regular_low was never synced/loaded: empty map -> nothing to remove).
+ * Assumes the legacy entry was written under the same app-state key (indexMac depends on it).
+ */
+export const buildStarLegacyRemovePatch = async (
+	starPatch: WAPatchCreate,
+	myAppStateKeyId: string,
+	lowState: LTHashState | undefined,
+	getAppStateSyncKey: FetchAppStateSyncKey
+): Promise<WAPatchCreate | undefined> => {
+	if (starPatch.index[0] !== 'star' || starPatch.type !== 'regular_high') {
+		return undefined
+	}
+
+	if (!lowState || !Object.keys(lowState.indexValueMap || {}).length) {
+		return undefined
+	}
+
+	const key = await getAppStateSyncKey(myAppStateKeyId)
+	if (!key?.keyData) {
+		return undefined
+	}
+
+	const indexMac = hmacSign(Buffer.from(JSON.stringify(starPatch.index)), mutationKeys(key.keyData).indexKey)
+	if (!lowState.indexValueMap[Buffer.from(indexMac).toString('base64')]) {
+		return undefined
+	}
+
+	return {
+		syncAction: { starAction: { starred: false }, timestamp: Date.now() },
+		index: starPatch.index,
+		type: 'regular_low',
+		apiVersion: starPatch.apiVersion,
+		operation: proto.SyncdMutation.SyncdOperation.REMOVE
+	}
 }
 
 export const decodeSyncdMutations = async (
