@@ -4,7 +4,7 @@ import type { ILogger } from '../Utils/logger'
 import { isHostedPnUser, isLidUser, isPnUser, jidDecode, jidNormalizedUser, WAJIDDomains } from '../WABinary'
 
 export interface LIDMappingStoreOptions {
-	/** How long a pn→lid USync MISS suppresses re-querying that pn (default 10 min). */
+	/** How long a pn→lid USync MISS suppresses re-querying that pn (default 2 min). */
 	negativeTtlMs?: number
 	/** Max negative entries held (oldest evicted first; default 5000). */
 	negativeMaxEntries?: number
@@ -44,7 +44,7 @@ export class LIDMappingStore {
 		pnToLIDFunc?: (jids: string[]) => Promise<LIDMapping[] | undefined>,
 		options: LIDMappingStoreOptions = {}
 	) {
-		this.negativeTtlMs = options.negativeTtlMs ?? 10 * 60 * 1000
+		this.negativeTtlMs = options.negativeTtlMs ?? 2 * 60 * 1000
 		this.negativeMaxEntries = options.negativeMaxEntries ?? 5000
 		this.now = options.now ?? (() => Date.now())
 		this.keys = keys
@@ -135,11 +135,15 @@ export class LIDMappingStore {
 		return (await this.getLIDsForPNs([pn]))?.[0]?.lid || null
 	}
 
-	async getLIDsForPNs(pns: string[]): Promise<LIDMapping[] | null> {
+	/**
+	 * `bypassNegativeCache` re-queries pns that recently missed (used by a forced assertSessions, where a
+	 * transient/partial USync miss must not block session fetch for the whole negative TTL).
+	 */
+	async getLIDsForPNs(pns: string[], opts: { bypassNegativeCache?: boolean } = {}): Promise<LIDMapping[] | null> {
 		if (pns.length === 0) return null
 
 		const sortedPns = [...new Set(pns)].sort()
-		const cacheKey = sortedPns.join(',')
+		const cacheKey = sortedPns.join(',') + (opts.bypassNegativeCache ? '|bypass' : '')
 
 		const inflight = this.inflightLIDLookups.get(cacheKey)
 		if (inflight) {
@@ -147,7 +151,7 @@ export class LIDMappingStore {
 			return inflight
 		}
 
-		const promise = this._getLIDsForPNsImpl(pns)
+		const promise = this._getLIDsForPNsImpl(pns, !!opts.bypassNegativeCache)
 		this.inflightLIDLookups.set(cacheKey, promise)
 
 		try {
@@ -157,7 +161,7 @@ export class LIDMappingStore {
 		}
 	}
 
-	private async _getLIDsForPNsImpl(pns: string[]): Promise<LIDMapping[] | null> {
+	private async _getLIDsForPNsImpl(pns: string[], bypassNegativeCache = false): Promise<LIDMapping[] | null> {
 		const usyncFetch: { [_: string]: number[] } = {}
 		const successfulPairs: { [_: string]: LIDMapping } = {}
 		const pending: Array<{ pn: string; pnUser: string; decoded: ReturnType<typeof jidDecode> }> = []
@@ -219,7 +223,7 @@ export class LIDMappingStore {
 						continue
 					}
 				} else {
-					if (this.isNegativelyCached(pnUser)) {
+					if (!bypassNegativeCache && this.isNegativelyCached(pnUser)) {
 						this.logger.trace(`No LID mapping for PN user ${pnUser}; recent USync miss cached, not re-querying`)
 						continue
 					}

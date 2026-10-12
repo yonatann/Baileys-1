@@ -118,5 +118,34 @@ describe('LIDMappingStore', () => {
 			await store.getLIDForPN(pns[3]!) // newest still cached
 			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(0)
 		})
+
+		it('bypassNegativeCache re-queries a negatively-cached pn (forced session assert)', async () => {
+			mockPnToLIDFunc.mockResolvedValue([])
+			await store.getLIDForPN(PN)
+			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(1)
+			await store.getLIDsForPNs([PN], { bypassNegativeCache: true })
+			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(2)
+			expect(mockPnToLIDFunc).toHaveBeenLastCalledWith([PN])
+		})
+
+		it('a bypass that succeeds clears the negative entry', async () => {
+			mockPnToLIDFunc.mockResolvedValueOnce([])
+			await store.getLIDForPN(PN)
+			mockPnToLIDFunc.mockResolvedValueOnce([{ pn: PN, lid: '123456@lid' }])
+			expect((await store.getLIDsForPNs([PN], { bypassNegativeCache: true }))?.[0]?.lid).toBe('123456@lid')
+			expect(await store.getLIDForPN(PN)).toBe('123456@lid')
+		})
+
+		it('defaults the negative TTL to 2 minutes', async () => {
+			const def = new LIDMappingStore(mockKeys, logger, mockPnToLIDFunc, { now: () => nowMs })
+			mockPnToLIDFunc.mockResolvedValue([])
+			await def.getLIDForPN(PN)
+			nowMs += 119_000
+			await def.getLIDForPN(PN)
+			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(1)
+			nowMs += 2_000
+			await def.getLIDForPN(PN)
+			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(2)
+		})
 	})
 })
