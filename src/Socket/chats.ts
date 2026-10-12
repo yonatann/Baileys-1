@@ -34,7 +34,10 @@ import {
 	commitAppPatch,
 	type ChatMutationMap,
 	decodePatches,
+	AppStateRetryGate,
+	appStateRetryBackoffMs,
 	decodeSyncdSnapshot,
+	delay,
 	encodeSyncdPatch,
 	ensureLTHashStateVersion,
 	extractSyncdPatches,
@@ -44,6 +47,8 @@ import {
 	isMissingKeyError,
 	MAX_SYNC_ATTEMPTS,
 	newLTHashState,
+	partitionByRetryGate,
+	trackGatedCollection,
 	processSyncAction
 } from '../Utils'
 import { makeMutex } from '../Utils/make-mutex'
@@ -130,6 +135,15 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	// Collections blocked on missing app state sync keys (mirrors WA Web's "Blocked" state).
 	// When a key arrives via APP_STATE_SYNC_KEY_SHARE, these are re-synced.
 	const blockedCollections = new Set<WAPatchName>()
+
+	// WA Web FailingFiniteRetry: a collection whose sync gave up is not re-fetched until its backoff
+	// (1s doubling to 1h, b07@1068624) elapses; one timer retries the cooled-down ones.
+	const appStateRetryGate = new AppStateRetryGate()
+	// value = whether the deferred sync was an initial sync (carried to the timer retry)
+	const gatedCollections = new Map<WAPatchName, boolean>()
+	let appStateSocketClosed = false
+	let gatedRetryTimer: NodeJS.Timeout | undefined
+	const APP_STATE_RETRY_TIMER_FLOOR_MS = 1000
 
 	const placeholderResendCache =
 		config.placeholderResendCache ||
@@ -548,8 +562,63 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		}
 	}
 
+	const scheduleGatedRetry = () => {
+		if (gatedRetryTimer || !gatedCollections.size) {
+			return
+		}
+
+		const now = Date.now()
+		const wait = Math.min(...[...gatedCollections.keys()].map(name => appStateRetryGate.remainingMs(name, now)))
+		gatedRetryTimer = setTimeout(
+			() => {
+				gatedRetryTimer = undefined
+				const now = Date.now()
+				const due = [...gatedCollections].filter(([name]) => appStateRetryGate.remainingMs(name, now) === 0)
+				for (const isInitial of [true, false]) {
+					const names = due.filter(([, initial]) => initial === isInitial).map(([name]) => name)
+					if (!names.length) {
+						continue
+					}
+
+					names.forEach(name => gatedCollections.delete(name))
+					resyncAppState(names, isInitial).catch(error => {
+						// a thrown query() (timeout) must not drop the collections from tracking
+						if (!appStateSocketClosed) {
+							names.forEach(name => trackGatedCollection(gatedCollections, name, isInitial, appStateRetryGate))
+							scheduleGatedRetry()
+						}
+
+						onUnexpectedError(error, 'gated collections resync')
+					})
+				}
+
+				scheduleGatedRetry()
+			},
+			Math.max(wait, APP_STATE_RETRY_TIMER_FLOOR_MS)
+		)
+		gatedRetryTimer.unref?.()
+	}
+
 	const resyncAppState = ev.createBufferedFunction(
-		async (collections: readonly WAPatchName[], isInitialSync: boolean) => {
+		async (requested: readonly WAPatchName[], isInitialSync: boolean, opts?: { bypassGate?: boolean }) => {
+			// skip collections still cooling down after a failed sync (retried by the timer instead);
+			// explicit writes (appPatch) bypass the gate: they must fetch before encoding
+			const { run: collections, deferred } = partitionByRetryGate(
+				requested,
+				appStateRetryGate,
+				Date.now(),
+				opts?.bypassGate
+			)
+			for (const { name, remainingMs } of deferred) {
+				logger.info({ name, remainingMs }, `${name} in sync backoff, deferring`)
+				trackGatedCollection(gatedCollections, name, isInitialSync)
+			}
+
+			scheduleGatedRetry()
+			if (!collections.length) {
+				return
+			}
+
 			const appStateSyncKeyCache = new Map<string, proto.Message.IAppStateSyncKeyData | null>()
 
 			const getCachedAppStateSyncKey = async (
@@ -576,10 +645,21 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				// collections that failed and need a full snapshot on retry
 				// mirrors WA Web's ErrorFatal -> force snapshot behavior
 				const forceSnapshotCollections = new Set<WAPatchName>()
+				// pause before the next round when a collection failed in this one. NB: runs inside the
+				// keys.transaction (the whole fetch loop does); moving it out would mean restructuring the loop
+				// into per-round transactions, so the <=1s wait (only after a failure) is accepted here.
+				let retryBackoffMs = 0
 				// keep executing till all collections are done
 				// sometimes a single patch request will not return all the patches (God knows why)
 				// so we fetch till they're all done (this is determined by the "has_more_patches" flag)
 				while (collectionsToHandle.size) {
+					// WA Web waits min(max(2^n*1s, serverBackoff), 1h) before re-trying a failed collection
+					if (retryBackoffMs > 0) {
+						logger.info({ backoffMs: retryBackoffMs }, 'app state sync retry backoff')
+						await delay(retryBackoffMs)
+						retryBackoffMs = 0
+					}
+
 					const states = {} as { [T in WAPatchName]: LTHashState }
 					const nodes: BinaryNode[] = []
 
@@ -681,6 +761,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 							} else {
 								// collection is done with sync
 								collectionsToHandle.delete(name)
+								appStateRetryGate.recordSuccess(name)
 							}
 						} catch (error: any) {
 							attemptsMap[name] = (attemptsMap[name] || 0) + 1
@@ -710,19 +791,29 @@ export const makeChatsSocket = (config: SocketConfig) => {
 									`${name} blocked on missing key from v${states[name].version}, retrying with snapshot`
 								)
 								forceSnapshotCollections.add(name)
+								retryBackoffMs = Math.max(retryBackoffMs, appStateRetryBackoffMs(attemptsMap[name]! - 1))
 							} else if (isAppStateSyncIrrecoverable(error, attemptsMap[name])) {
-								logger.warn(logData, `failed to sync ${name} from v${states[name].version}, giving up`)
+								const cooldownMs = appStateRetryGate.recordFailure(name, Date.now())
+								logger.warn(
+									{ ...logData, cooldownMs },
+									`failed to sync ${name} from v${states[name].version}, giving up (retry in ${cooldownMs}ms)`
+								)
 								collectionsToHandle.delete(name)
+								trackGatedCollection(gatedCollections, name, isInitialSync)
 							} else {
 								logger.info(logData, `failed to sync ${name} from v${states[name].version}, forcing snapshot retry`)
 								// force a full snapshot on retry to recover from
 								// corrupted local state (e.g. LTHash MAC mismatch)
 								forceSnapshotCollections.add(name)
+								retryBackoffMs = Math.max(retryBackoffMs, appStateRetryBackoffMs(attemptsMap[name]! - 1))
 							}
 						}
 					}
 				}
 			}, authState?.creds?.me?.id || 'resync-app-state')
+			if (!appStateSocketClosed) {
+				scheduleGatedRetry()
+			}
 
 			const { onMutation } = newAppStateChunkHandler(isInitialSync)
 			for (const key in globalMutationMap) {
@@ -914,7 +1005,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				name,
 				keys: authState.keys,
 				transactionKey: authState?.creds?.me?.id || 'app-patch',
-				resync: () => resyncAppState([name], false),
+				resync: () => resyncAppState([name], false, { bypassGate: true }),
 				encode: initial => encodeSyncdPatch(patchCreate, myAppStateKeyId, initial, getAppStateSyncKey),
 				buildNode: (patch, state) => ({
 					tag: 'iq',
@@ -1350,8 +1441,16 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	})
 
 	ev.on('connection.update', ({ connection, receivedPendingNotifications }) => {
+		if (connection === 'open') {
+			appStateSocketClosed = false
+		}
+
 		if (connection === 'close') {
+			appStateSocketClosed = true
 			blockedCollections.clear()
+			clearTimeout(gatedRetryTimer)
+			gatedRetryTimer = undefined
+			gatedCollections.clear()
 			clearTimeout(historySyncPausedTimeout)
 			historySyncPausedTimeout = undefined
 		}

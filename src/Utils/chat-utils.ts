@@ -142,6 +142,48 @@ export const ensureLTHashStateVersion = (state: LTHashState): LTHashState => {
 
 export const MAX_SYNC_ATTEMPTS = 2
 
+// WA Web retry schedule for a failing collection (WAWebSyncd b07@1068624, WAWebSyncdConst b08@1125583):
+//   delay = min(max(BASE ** retryIndex * MIN, serverBackoff), MAX), BASE=2, MIN=1s, MAX=1h
+export const APP_STATE_BACKOFF_MIN_MS = 1000
+export const APP_STATE_BACKOFF_MAX_MS = 60 * 60 * 1000
+export const APP_STATE_BACKOFF_BASE = 2
+
+/** Delay before retry number `retryIndex` (0 = first retry) of a failed collection sync. */
+export const appStateRetryBackoffMs = (retryIndex: number, serverBackoffMs = 0): number => {
+	const n = Number.isFinite(retryIndex) && retryIndex > 0 ? Math.floor(retryIndex) : 0
+	// Math.pow overflows to Infinity for huge n, which Math.min still caps
+	const exp = Math.pow(APP_STATE_BACKOFF_BASE, n) * APP_STATE_BACKOFF_MIN_MS
+	const floor = Number.isFinite(serverBackoffMs) && serverBackoffMs > 0 ? serverBackoffMs : 0
+	return Math.min(Math.max(exp, floor), APP_STATE_BACKOFF_MAX_MS)
+}
+
+/**
+ * Cross-call cooldown for collections whose sync just gave up. WA Web keeps a failed collection in
+ * FailingFiniteRetry and re-tries it on the backoff timer above; without this, every server_sync /
+ * reconnect re-fetched (and snapshot-forced) a persistently failing collection immediately.
+ * In-memory only: a new socket starts clean.
+ */
+export class AppStateRetryGate {
+	private readonly state = new Map<string, { failures: number; until: number }>()
+
+	/** Records a failure, returns the cooldown now in force (ms). */
+	recordFailure(name: string, now: number): number {
+		const failures = this.state.get(name)?.failures ?? 0
+		const wait = appStateRetryBackoffMs(failures)
+		this.state.set(name, { failures: failures + 1, until: now + wait })
+		return wait
+	}
+
+	recordSuccess(name: string): void {
+		this.state.delete(name)
+	}
+
+	/** Milliseconds until `name` may sync again (0 = now). */
+	remainingMs(name: string, now: number): number {
+		return Math.max(0, (this.state.get(name)?.until ?? 0) - now)
+	}
+}
+
 /**
  * Check if an error is a missing app state sync key.
  * WA Web treats these as "Blocked" (waits for key arrival), not fatal.
@@ -158,6 +200,46 @@ export const isMissingKeyError = (error: any): boolean => {
  */
 export const isAppStateSyncIrrecoverable = (error: any, attempts: number): boolean => {
 	return attempts >= MAX_SYNC_ATTEMPTS || error?.name === 'TypeError'
+}
+
+/**
+ * Splits a resync request by the retry gate. `bypass` (explicit user writes such as appPatch, which must
+ * fetch the latest state before encoding) runs everything: a silent no-op there would send a patch on stale state.
+ */
+export const partitionByRetryGate = <T extends string>(
+	requested: readonly T[],
+	gate: AppStateRetryGate,
+	now: number,
+	bypass = false
+): { run: T[]; deferred: { name: T; remainingMs: number }[] } => {
+	const run: T[] = []
+	const deferred: { name: T; remainingMs: number }[] = []
+	for (const name of requested) {
+		const remainingMs = bypass ? 0 : gate.remainingMs(name, now)
+		if (remainingMs > 0) {
+			deferred.push({ name, remainingMs })
+		} else {
+			run.push(name)
+		}
+	}
+
+	return { run, deferred }
+}
+
+/**
+ * Tracks a collection for a timer retry. An existing `isInitialSync=true` is never downgraded. With a gate
+ * (the retry itself rejected), a failure is recorded so a query() that fails instantly backs off
+ * exponentially instead of re-firing at the timer floor; returns the cooldown now in force.
+ */
+export const trackGatedCollection = <T extends string>(
+	tracked: Map<T, boolean>,
+	name: T,
+	isInitialSync: boolean,
+	gate?: AppStateRetryGate,
+	now = Date.now()
+): number => {
+	tracked.set(name, tracked.get(name) || isInitialSync)
+	return gate ? gate.recordFailure(name, now) : 0
 }
 
 export const encodeSyncdPatch = async (
