@@ -229,6 +229,37 @@ export const encodeSyncdPatch = async (
 }
 
 /**
+ * True when `patch` is the legacy regular_low star cleanup REMOVE built by
+ * buildStarLegacyRemovePatch. Such a REMOVE is pure housekeeping: it must NOT be surfaced as an
+ * own chats.update event (processSyncAction reads starAction/index and ignores the operation, so
+ * it would emit starred:false right after the real starred:true from regular_high).
+ */
+export const isStarLegacyCleanupPatch = (patch: WAPatchCreate) =>
+	patch.type === 'regular_low' &&
+	patch.index[0] === 'star' &&
+	patch.operation === proto.SyncdMutation.SyncdOperation.REMOVE
+
+/** Whether `state.indexValueMap` (keyed by base64 indexMac) holds `index`, using the given key. */
+export const stateHoldsIndex = async (
+	index: string[],
+	myAppStateKeyId: string,
+	state: LTHashState | undefined,
+	getAppStateSyncKey: FetchAppStateSyncKey
+) => {
+	if (!state || !Object.keys(state.indexValueMap || {}).length) {
+		return false
+	}
+
+	const key = await getAppStateSyncKey(myAppStateKeyId)
+	if (!key?.keyData) {
+		return false
+	}
+
+	const indexMac = hmacSign(Buffer.from(JSON.stringify(index)), mutationKeys(key.keyData).indexKey)
+	return !!state.indexValueMap[Buffer.from(indexMac).toString('base64')]
+}
+
+/**
  * Old Baileys wrote star mutations into regular_low; WA Web (WAWebStarMessageSync,
  * b10@791524) uses regular_high. WA Web's sync store is keyed by index alone with no
  * cross-collection timestamp arbitration (store get b07@1055100; 'index-in-wrong-collection'
@@ -236,10 +267,14 @@ export const encodeSyncdPatch = async (
  * same-collection mutations; star apply is unconditional b10@790813-796388), so a stale
  * regular_low star can override a newer regular_high (un)star on replay.
  *
- * If the stored regular_low LTHash state still holds this star's index (indexValueMap is keyed
- * by base64 indexMac), returns a REMOVE for it in regular_low; otherwise undefined (including
- * when regular_low was never synced/loaded: empty map -> nothing to remove).
- * Assumes the legacy entry was written under the same app-state key (indexMac depends on it).
+ * If the stored regular_low LTHash state still holds this star's index, returns a REMOVE for it
+ * in regular_low; otherwise undefined (including when regular_low was never synced/loaded).
+ * The REMOVE carries an empty value, like WA Web's hand-built REMOVE (b07@1344145).
+ *
+ * LIMITATION: WA Web encrypts a REMOVE with the keyId/keyData of the stored SET and drops a
+ * REMOVE that has no corresponding SET (b07@1468900-1469300, b07@1477246). We encrypt with
+ * myAppStateKeyId, and the indexMac lookup also uses that key, so a legacy entry written under a
+ * different (rotated) key simply doesn't match: a safe no-op, the stale star then stays.
  */
 export const buildStarLegacyRemovePatch = async (
 	starPatch: WAPatchCreate,
@@ -251,22 +286,12 @@ export const buildStarLegacyRemovePatch = async (
 		return undefined
 	}
 
-	if (!lowState || !Object.keys(lowState.indexValueMap || {}).length) {
-		return undefined
-	}
-
-	const key = await getAppStateSyncKey(myAppStateKeyId)
-	if (!key?.keyData) {
-		return undefined
-	}
-
-	const indexMac = hmacSign(Buffer.from(JSON.stringify(starPatch.index)), mutationKeys(key.keyData).indexKey)
-	if (!lowState.indexValueMap[Buffer.from(indexMac).toString('base64')]) {
+	if (!(await stateHoldsIndex(starPatch.index, myAppStateKeyId, lowState, getAppStateSyncKey))) {
 		return undefined
 	}
 
 	return {
-		syncAction: { starAction: { starred: false }, timestamp: Date.now() },
+		syncAction: { timestamp: Date.now() },
 		index: starPatch.index,
 		type: 'regular_low',
 		apiVersion: starPatch.apiVersion,

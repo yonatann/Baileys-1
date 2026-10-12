@@ -5,6 +5,8 @@ import {
 	buildStarLegacyRemovePatch,
 	chatModificationToAppPatch,
 	decodeSyncdPatch,
+	isStarLegacyCleanupPatch,
+	stateHoldsIndex,
 	encodeSyncdPatch,
 	newLTHashState
 } from '../../Utils/chat-utils'
@@ -47,7 +49,10 @@ describe('legacy regular_low star cleanup (C7a follow-up)', () => {
 	it('returns undefined when regular_low does not hold it / is empty / patch is not a star', async () => {
 		expect(await buildStarLegacyRemovePatch(starPatch(true), KEY_ID, newLTHashState(), getKey)).toBeUndefined()
 		const { state } = await encodeSyncdPatch(legacyLowStar(), KEY_ID, newLTHashState(), getKey)
-		const other = chatModificationToAppPatch({ star: { messages: [{ id: 'ZZZ', fromMe: true }], star: true } } as any, JID)
+		const other = chatModificationToAppPatch(
+			{ star: { messages: [{ id: 'ZZZ', fromMe: true }], star: true } } as any,
+			JID
+		)
 		expect(await buildStarLegacyRemovePatch(other, KEY_ID, state, getKey)).toBeUndefined()
 		const archive = chatModificationToAppPatch({ archive: true, lastMessages: [] } as any, JID)
 		expect(await buildStarLegacyRemovePatch(archive, KEY_ID, state, getKey)).toBeUndefined()
@@ -69,5 +74,25 @@ describe('legacy regular_low star cleanup (C7a follow-up)', () => {
 		expect(Object.keys(decoded.indexValueMap)).toHaveLength(0)
 		expect(decoded.hash.equals(next.hash)).toBe(true)
 		expect(seen[0].index[0]).toBe('star')
+	})
+
+	it('the cleanup REMOVE has an empty value and is flagged so appPatch emits no own starred:false event', async () => {
+		const { state } = await encodeSyncdPatch(legacyLowStar(), KEY_ID, newLTHashState(), getKey)
+		const rm = (await buildStarLegacyRemovePatch(starPatch(true), KEY_ID, state, getKey))!
+		expect(rm.syncAction.starAction).toBeUndefined()
+		expect(isStarLegacyCleanupPatch(rm)).toBe(true)
+		// the real star (SET, regular_high) and unrelated REMOVEs still emit
+		expect(isStarLegacyCleanupPatch(starPatch(true))).toBe(false)
+		expect(isStarLegacyCleanupPatch({ ...rm, index: ['contact', JID] })).toBe(false)
+	})
+
+	it('stateHoldsIndex is false once the REMOVE was applied (concurrent second REMOVE is skipped)', async () => {
+		const { state } = await encodeSyncdPatch(legacyLowStar(), KEY_ID, newLTHashState(), getKey)
+		const idx = starPatch(true).index
+		expect(await stateHoldsIndex(idx, KEY_ID, state, getKey)).toBe(true)
+		const rm = (await buildStarLegacyRemovePatch(starPatch(true), KEY_ID, state, getKey))!
+		const { state: after } = await encodeSyncdPatch(rm, KEY_ID, state, getKey)
+		expect(await stateHoldsIndex(idx, KEY_ID, after, getKey)).toBe(false)
+		expect(await buildStarLegacyRemovePatch(starPatch(true), KEY_ID, after, getKey)).toBeUndefined()
 	})
 })

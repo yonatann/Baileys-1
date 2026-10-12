@@ -31,6 +31,8 @@ import type { LabelActionBody } from '../Types/Label'
 import { SyncState } from '../Types/State'
 import {
 	buildStarLegacyRemovePatch,
+	isStarLegacyCleanupPatch,
+	stateHoldsIndex,
 	chatModificationToAppPatch,
 	type ChatMutationMap,
 	decodePatches,
@@ -900,6 +902,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	}
 
 	const appPatch = async (patchCreate: WAPatchCreate) => {
+		let skipped = false
 		const name = patchCreate.type
 		const myAppStateKeyId = authState.creds.myAppStateKeyId
 		if (!myAppStateKeyId) {
@@ -917,6 +920,16 @@ export const makeChatsSocket = (config: SocketConfig) => {
 
 				const { [name]: currentSyncVersion } = await authState.keys.get('app-state-sync-version', [name])
 				initial = currentSyncVersion ? ensureLTHashStateVersion(currentSyncVersion) : newLTHashState()
+
+				// Legacy star cleanup: re-check under the mutex against the freshly resynced regular_low
+				// state, so a concurrent chatModify can't send a second REMOVE with no previous SET.
+				if (
+					isStarLegacyCleanupPatch(patchCreate) &&
+					!(await stateHoldsIndex(patchCreate.index, myAppStateKeyId, initial, getAppStateSyncKey))
+				) {
+					skipped = true
+					return
+				}
 
 				encodeResult = await encodeSyncdPatch(patchCreate, myAppStateKeyId, initial, getAppStateSyncKey)
 				const { patch, state } = encodeResult
@@ -957,6 +970,10 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				await authState.keys.set({ 'app-state-sync-version': { [name]: state } })
 			}, authState?.creds?.me?.id || 'app-patch')
 		})
+
+		if (skipped || isStarLegacyCleanupPatch(patchCreate)) {
+			return
+		}
 
 		if (config.emitOwnEvents) {
 			const { onMutation } = newAppStateChunkHandler(false)
