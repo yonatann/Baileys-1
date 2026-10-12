@@ -355,3 +355,21 @@ describe('getHttpStream network classification (WA Web maps only fetch TypeError
 		expect(isHttpNetworkError(err)).toBe(true)
 	})
 })
+
+describe('a failing server-error receipt never replaces the download error', () => {
+	it('processMessage rejects with the original download error when onDownloadFailed also rejects', async () => {
+		const order: string[] = []
+		const onDownloadFailed = jest.fn(async (..._args: unknown[]) => {
+			throw new Error('socket closed')
+		})
+		const err = await processMessage(
+			makeDownloadMsg(T.RECENT),
+			makeCtx(true, recordingEv(order), {
+				historySyncAcker: { onDownloadFailed, chunkAck: () => async () => {} }
+			}) as any
+		).catch(e => e)
+		expect(onDownloadFailed).toHaveBeenCalledTimes(1)
+		expect(String(err.message)).not.toContain('socket closed')
+		expect(err).toBeInstanceOf(Error)
+	})
+})
