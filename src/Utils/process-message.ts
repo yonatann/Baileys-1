@@ -32,7 +32,7 @@ import {
 } from '../WABinary'
 import { aesDecryptGCM, hmacSign } from './crypto'
 import { getKeyAuthor, toNumber } from './generics'
-import { downloadAndProcessHistorySyncNotification } from './history'
+import { downloadAndProcessHistorySyncNotification, type HistorySyncAcker } from './history'
 import type { ILogger } from './logger'
 import { buildMergedTcTokenIndexWrite, resolveTcTokenJid } from './tc-token-utils'
 
@@ -47,14 +47,11 @@ type ProcessMessageContext = {
 	signalRepository: SignalRepositoryWithLIDStore
 	getMessage: SocketConfig['getMessage']
 	/**
-	 * Called once a history-sync chunk was downloaded, decoded and handed to `messaging-history.set`.
-	 * WA Web sends the `hist_sync` completion receipt only at this point (b07@572936), never on receive,
-	 * never for chunks that were skipped or failed. Errors thrown here are swallowed (logged).
+	 * `hist_sync` receipts (see history.ts `createHistorySyncAcker`). `chunkAck` hands the chunk's receipt to the
+	 * `messaging-history.set` event, released after the store (WA Web b07@572936); `onDownloadFailed` sends the
+	 * encrypted server-error receipt when the download stage fails.
 	 */
-	onHistorySyncStored?: (
-		notification: proto.Message.IHistorySyncNotification,
-		message: WAMessage
-	) => Promise<void> | void
+	historySyncAcker?: Pick<HistorySyncAcker, 'chunkAck' | 'onDownloadFailed'>
 }
 
 const REAL_MSG_STUB_TYPES = new Set([
@@ -311,7 +308,7 @@ const processMessage = async (
 		logger,
 		options,
 		getMessage,
-		onHistorySyncStored
+		historySyncAcker
 	}: ProcessMessageContext
 ) => {
 	const meId = creds.me!.id
@@ -406,7 +403,9 @@ const processMessage = async (
 						})
 					}
 
-					const data = await downloadAndProcessHistorySyncNotification(histNotification, options, logger)
+					const data = await downloadAndProcessHistorySyncNotification(histNotification, options, logger, err =>
+							historySyncAcker?.onDownloadFailed(histNotification, message, err)
+						)
 
 					if (data.lidPnMappings?.length) {
 						logger?.debug({ count: data.lidPnMappings.length }, 'processing LID-PN mappings from history sync')
@@ -421,20 +420,10 @@ const processMessage = async (
 						...data,
 						isLatest: histNotification.syncType !== proto.HistorySync.HistorySyncType.ON_DEMAND ? isLatest : undefined,
 						chunkOrder: histNotification.chunkOrder,
-						peerDataRequestSessionId: histNotification.peerDataRequestSessionId
+						peerDataRequestSessionId: histNotification.peerDataRequestSessionId,
+						historySyncAck: historySyncAcker?.chunkAck(histNotification, message)
 					})
 
-					// chunk downloaded+decoded and `messaging-history.set` emitted (bufferable: NOT yet flushed/persisted by consumers)
-					// -> now (and only now) the phone may be told it was applied (WA Web b07@572936)
-					try {
-						await onHistorySyncStored?.(histNotification, message)
-					} catch (err) {
-						// not rethrown: the chunk is already emitted; a lost receipt only means the phone may re-send
-						logger?.error(
-							{ err, id: message.key.id },
-							'onHistorySyncStored callback failed (hist_sync receipt not sent)'
-						)
-					}
 				}
 
 				break

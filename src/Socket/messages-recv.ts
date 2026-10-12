@@ -58,6 +58,7 @@ import {
 	xmppSignedPreKey
 } from '../Utils'
 import { makeMutex } from '../Utils/make-mutex'
+import { buildHistSyncServerErrorReceiptNode } from '../Utils/messages-media'
 import { makeOfflineNodeProcessor, type MessageType } from '../Utils/offline-node-processor'
 import { buildAckStanza } from '../Utils/stanza-ack'
 import {
@@ -1641,7 +1642,8 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		shouldSyncHistoryMessage: config.shouldSyncHistoryMessage,
 		processableTypes: PROCESSABLE_HISTORY_TYPES,
 		sendHistSyncReceipt: msg =>
-			sendReceipt(jidNormalizedUser(msg.key.remoteJid!), undefined, [msg.key.id!], 'hist_sync')
+			sendReceipt(jidNormalizedUser(msg.key.remoteJid!), undefined, [msg.key.id!], 'hist_sync'),
+		sendServerErrorReceipt: (remote, id, mediaKey) => sendNode(buildHistSyncServerErrorReceiptNode({ remote, id, mediaKey }))
 	})
 
 	const handleMessage = async (node: BinaryNode) => {
@@ -1831,7 +1833,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				cleanMessage(msg, authState.creds.me!.id, authState.creds.me!.lid!)
 
 				await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify', {
-					onHistorySyncStored: historyAcker.onStored
+					historySyncAcker: historyAcker
 				})
 			})
 		} catch (error) {

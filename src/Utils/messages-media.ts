@@ -368,6 +368,20 @@ export async function generateThumbnail(
 	}
 }
 
+/**
+ * Request-stage HTTP failures (fetch threw, or the server answered non-ok) are tagged so the hist_sync error receipt
+ * can skip them, as WA Web does for HttpNetworkError (b07@557378). Tagged by identity, so it survives re-wrapping
+ * the same error object and never changes its message.
+ */
+const httpNetworkErrors = new WeakSet<object>()
+
+export const markHttpNetworkError = <T extends object>(err: T): T => {
+	httpNetworkErrors.add(err)
+	return err
+}
+
+export const isHttpNetworkError = (err: unknown): boolean => typeof err === 'object' && err !== null && httpNetworkErrors.has(err)
+
 export const getHttpStream = async (url: string | URL, options: RequestInit & { isStream?: true } = {}) => {
 	const response = await fetch(url.toString(), {
 		dispatcher: options.dispatcher,
@@ -594,10 +608,19 @@ export const downloadEncryptedContent = async (
 	}
 
 	// download the message
-	const fetched = await getHttpStream(downloadUrl, {
-		...(options || {}),
-		headers
-	})
+	let fetched: Readable
+	try {
+		fetched = await getHttpStream(downloadUrl, {
+			...(options || {}),
+			headers
+		})
+	} catch (err) {
+		if (typeof err === 'object' && err !== null) {
+			markHttpNetworkError(err)
+		}
+
+		throw err
+	}
 
 	let remainingBytes = Buffer.from([])
 
@@ -929,6 +952,44 @@ export const getWAUploadToServer = (
 
 const getMediaRetryKey = (mediaKey: Buffer | Uint8Array) => {
 	return hkdf(mediaKey, 32, { info: 'WhatsApp Media Retry Notification' })
+}
+
+/**
+ * Encrypted `server-error` receipt for a history chunk whose download failed, so the phone re-uploads it
+ * (WAWebSendHistSyncServerErrorReceiptJob, b07@548700). Same encoding as the media retry receipt: AES-GCM with the
+ * retry key derived from the chunk's mediaKey, AAD = stanza id.
+ */
+export const buildHistSyncServerErrorReceiptNode = ({
+	remote,
+	id,
+	mediaKey
+}: {
+	remote: string
+	id: string
+	mediaKey: Buffer | Uint8Array
+}): BinaryNode => {
+	const recpBuffer = proto.ServerErrorReceipt.encode({ stanzaId: id }).finish()
+	const iv = Crypto.randomBytes(12)
+	const ciphertext = aesEncryptGCM(recpBuffer, getMediaRetryKey(mediaKey), iv, Buffer.from(id))
+	return {
+		tag: 'receipt',
+		attrs: {
+			type: 'server-error',
+			to: jidNormalizedUser(remote),
+			id,
+			category: 'peer'
+		},
+		content: [
+			{
+				tag: 'encrypt',
+				attrs: {},
+				content: [
+					{ tag: 'enc_p', attrs: {}, content: ciphertext },
+					{ tag: 'enc_iv', attrs: {}, content: iv }
+				]
+			}
+		]
+	}
 }
 
 /**

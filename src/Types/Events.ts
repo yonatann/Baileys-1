@@ -34,6 +34,12 @@ export type BaileysEventMap = {
 		pastParticipants?: proto.IPastParticipants[] | null
 		chunkOrder?: number | null
 		peerDataRequestSessionId?: string | null
+		/**
+		 * only present when `awaitHistorySyncStore` is enabled: the chunk's `hist_sync` receipt. Call it once the
+		 * chunk is durably stored (idempotent); the phone is told the chunk is safe only then. Not calling it
+		 * means the phone re-sends the chunk.
+		 */
+		historySyncAck?: () => Promise<void>
 	}
 	/** signals history sync milestones (completion or stall) per sync type */
 	'messaging-history.status': {
