@@ -13,13 +13,17 @@ import {
 // WA Web (WAWebSyncdUtils.extractParticipantForSync, local ScriptCache module):
 // the participant segment of a per-message index is the sender's JID only for an
 // INCOMING message in a non-user chat (isUser = c.us|lid|bot|hosted|hosted.lid);
-// otherwise '0'. The index is [action, chatJid, msgId, fromMe?'1':'0', participant].
+// otherwise '0'. The sender is emitted via Wid.toString({legacy:true}), which KEEPS the
+// device when nonzero. The index is [action, chatJid, msgId, fromMe?'1':'0', participant].
+// Only the star path is confirmed by this evidence; the deleteMessageForMe builder is
+// UNCONFIRMED (the cache holds only its proto/enum), so its tests assume the same extractor.
 const GROUP = '120363000000000000@g.us'
 const BROADCAST = '5511888888888@broadcast'
 const STATUS = 'status@broadcast'
 const NEWSLETTER = '120363000000000001@newsletter'
 const SENDER = '5511999999999@s.whatsapp.net'
 const SENDER_DEVICE = '5511999999999:12@s.whatsapp.net'
+const SENDER_LEGACY_C_US = '5511999999999@c.us'
 const SENDER_LID = '123456789012345@lid'
 const SENDER_LID_DEVICE = '123456789012345:3@lid'
 
@@ -42,12 +46,22 @@ describe('per-message app-state index participant segment', () => {
 				SENDER_LID
 			])
 		})
-		it('device-suffixed PN sender is normalized to the device-less JID', () => {
-			expect(star(GROUP, { id: 'M6', fromMe: false, participant: SENDER_DEVICE })[4]).toBe(SENDER)
-			expect(del(GROUP, { id: 'M6', fromMe: false, participant: SENDER_DEVICE })[4]).toBe(SENDER)
+		it('device-suffixed PN sender keeps its device (WA Web toString legacy keeps device)', () => {
+			expect(star(GROUP, { id: 'M6', fromMe: false, participant: SENDER_DEVICE })[4]).toBe(SENDER_DEVICE)
+			expect(del(GROUP, { id: 'M6', fromMe: false, participant: SENDER_DEVICE })[4]).toBe(SENDER_DEVICE)
 		})
-		it('device-suffixed LID sender is normalized to the device-less JID', () => {
-			expect(star(GROUP, { id: 'M7', fromMe: false, participant: SENDER_LID_DEVICE })[4]).toBe(SENDER_LID)
+		it('device-suffixed LID sender keeps its device', () => {
+			expect(star(GROUP, { id: 'M7', fromMe: false, participant: SENDER_LID_DEVICE })[4]).toBe(SENDER_LID_DEVICE)
+		})
+		it('zero device is omitted (device 0 is the default, as in WA Web _serialized)', () => {
+			expect(star(GROUP, { id: 'M13', fromMe: false, participant: '5511999999999:0@s.whatsapp.net' })[4]).toBe(SENDER)
+		})
+		it('legacy c.us sender maps to s.whatsapp.net (WA Web legacy toString), device kept', () => {
+			expect(star(GROUP, { id: 'M14', fromMe: false, participant: SENDER_LEGACY_C_US })[4]).toBe(SENDER)
+			expect(star(GROUP, { id: 'M15', fromMe: false, participant: '5511999999999:12@c.us' })[4]).toBe(SENDER_DEVICE)
+		})
+		it('undecodable participant falls back to 0', () => {
+			expect(star(GROUP, { id: 'M16', fromMe: false, participant: 'not-a-jid' })[4]).toBe('0')
 		})
 		it('@broadcast incoming sender carries the sender JID', () => {
 			expect(star(BROADCAST, { id: 'M8', fromMe: false, participant: SENDER })).toEqual([
@@ -59,7 +73,7 @@ describe('per-message app-state index participant segment', () => {
 			])
 		})
 		it('status@broadcast incoming sender carries the sender JID', () => {
-			expect(del(STATUS, { id: 'M9', fromMe: false, participant: SENDER_DEVICE })[4]).toBe(SENDER)
+			expect(del(STATUS, { id: 'M9', fromMe: false, participant: SENDER_DEVICE })[4]).toBe(SENDER_DEVICE)
 		})
 		it('@newsletter: no participant on the key -> 0', () => {
 			expect(star(NEWSLETTER, { id: 'M10', fromMe: false })[4]).toBe('0')
@@ -116,7 +130,7 @@ describe('per-message app-state index participant segment', () => {
 				{ star: { messages: [{ id: 'RT1', fromMe: false, participant: SENDER_DEVICE }], star: true } },
 				GROUP
 			)
-			expect(m!.index).toEqual(['star', GROUP, 'RT1', '0', SENDER])
+			expect(m!.index).toEqual(['star', GROUP, 'RT1', '0', SENDER_DEVICE])
 			expect(m!.syncAction.value?.starAction?.starred).toBe(true)
 		})
 
@@ -131,7 +145,7 @@ describe('per-message app-state index participant segment', () => {
 				},
 				BROADCAST
 			)
-			expect(m!.index).toEqual(['deleteMessageForMe', BROADCAST, 'RT2', '0', SENDER_LID])
+			expect(m!.index).toEqual(['deleteMessageForMe', BROADCAST, 'RT2', '0', SENDER_LID_DEVICE])
 		})
 
 		it('processSyncAction reads starred from starAction, not from the index segment', async () => {

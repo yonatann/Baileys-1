@@ -1153,9 +1153,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	}
 
 	/**
-	 * Star or Unstar a message
-	 */
-	/**
+	 * Star or Unstar a message.
 	 * `messages[0]` is the only message indexed (one patch per call). Pass the full key
 	 * (`participant` included) so incoming group/broadcast messages get the sender segment.
 	 */

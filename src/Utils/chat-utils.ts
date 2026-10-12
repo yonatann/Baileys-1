@@ -29,6 +29,8 @@ import {
 	isJidMetaAI,
 	isLidUser,
 	isPnUser,
+	jidDecode,
+	jidEncode,
 	jidNormalizedUser
 } from '../WABinary'
 import { aesDecrypt, aesEncrypt, hmacSign } from './crypto'
@@ -742,19 +744,35 @@ const isWaUserChat = (jid: string) =>
  *     Default/Service Worker/ScriptCache/f1cdccba37924bda_0, ~byte 3863740):
  *   function s(e){var t="0";return e.participant&&!e.remote.isUser()&&!e.fromMe&&(t=e.participant.toString({legacy:!0})),t}
  *   function l(e){return[e.remote.toString({legacy:!0}),e.id,e.fromMe?"1":"0",s(e)]}
- * Index = [action, chatJid, msgId, fromMe ? '1' : '0', participant]. The participant is the sender
- * ONLY for an incoming message in a non-user chat; otherwise '0'. The same extractor is used by
- * WA Web's own star lookup (`WAWebSyncdUtils.constructMsgKeySegmentsFromMsgKey`), so it is the
- * segment the phone matches on.
+ * WAWebWid `toString({legacy:true})`: a c.us wid is emitted as `user[:device]@s.whatsapp.net`;
+ * other servers fall through to `_serialized`, which also carries `:device` when nonzero.
+ * So the device is KEPT (only a zero device is omitted).
  *
- * Addressing: no PN<->LID conversion. WA Web emits the sender exactly as it is stored on the key
- * (`toString({legacy:true})`), so we emit the key's own PN or LID JID. Device suffixes are stripped
- * (WA Web's Wid has no device), so `5511...:12@s.whatsapp.net` -> `5511...@s.whatsapp.net`.
+ * Index = [action, chatJid, msgId, fromMe ? '1' : '0', participant]. The participant is the sender
+ * ONLY for an incoming message in a non-user chat; otherwise '0'. The star lookup uses the same
+ * extractor (`WAWebSyncdUtils.constructMsgKeySegmentsFromMsgKey`), so it is the segment the phone
+ * matches on. Only the star path is confirmed in this evidence; the deleteMessageForMe index builder
+ * is UNCONFIRMED (the cache holds only its proto/enum), so it is assumed to share this extractor.
+ *
+ * Addressing: no PN<->LID conversion. The key's own PN or LID JID is emitted with its device, and the
+ * legacy c.us -> s.whatsapp.net mapping is applied. Example: `5511...:12@s.whatsapp.net` stays as-is.
+ * An empty or undecodable participant falls back to '0'.
  *
  * A wrong segment never matches the index on the phone, so the mutation is silently dropped.
  */
-const messageIndexParticipant = (chatJid: string, key: { fromMe?: boolean | null; participant?: string | null }) =>
-	key.participant && !key.fromMe && !isWaUserChat(chatJid) ? jidNormalizedUser(key.participant) : '0'
+const messageIndexParticipant = (chatJid: string, key: { fromMe?: boolean | null; participant?: string | null }) => {
+	if (!key.participant || key.fromMe || isWaUserChat(chatJid)) {
+		return '0'
+	}
+
+	const decoded = jidDecode(key.participant)
+	if (!decoded?.user) {
+		return '0'
+	}
+
+	const server = decoded.server === 'c.us' ? 's.whatsapp.net' : decoded.server
+	return jidEncode(decoded.user, server, decoded.device) || '0'
+}
 
 export const chatModificationToAppPatch = (mod: ChatModification, jid: string) => {
 	const OP = proto.SyncdMutation.SyncdOperation
