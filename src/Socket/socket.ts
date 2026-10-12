@@ -927,7 +927,14 @@ export const makeSocket = (config: SocketConfig) => {
 		logger.debug('pair success recv')
 		try {
 			updateServerTimeOffset(stanza)
-			const { reply, creds: updatedCreds } = configureSuccessfulPairing(stanza, creds)
+			const { reply, creds: updatedCreds, clientPairingProps } = configureSuccessfulPairing(stanza, creds)
+			if (clientPairingProps && clientPairingProps.isChatDbLidMigrated !== true) {
+				// WA Web would socketLogout here (LidMigrationUnmigratedPrimary); we deliberately only log.
+				logger.info(
+					{ isChatDbLidMigrated: clientPairingProps.isChatDbLidMigrated },
+					'pair-success: account not LID-migrated (no logout, flag unchanged)'
+				)
+			}
 
 			logger.info(
 				{ me: updatedCreds.me, platform: updatedCreds.platform },
