@@ -4,6 +4,7 @@ import {
 	APP_STATE_BACKOFF_MIN_MS,
 	AppStateRetryGate,
 	partitionByRetryGate,
+	trackGatedCollection,
 	appStateRetryBackoffMs
 } from '../../Utils/chat-utils'
 
@@ -81,5 +82,23 @@ describe('partitionByRetryGate', () => {
 
 	it('runs a collection once its cooldown has elapsed', () => {
 		expect(partitionByRetryGate(['regular'], cooled(), 1000).run).toEqual(['regular'])
+	})
+})
+
+describe('trackGatedCollection', () => {
+	it('never downgrades an existing initial-sync flag', () => {
+		const tracked = new Map<string, boolean>([['regular', true]])
+		trackGatedCollection(tracked, 'regular', false)
+		expect(tracked.get('regular')).toBe(true)
+		trackGatedCollection(tracked, 'regular_low', false)
+		expect(tracked.get('regular_low')).toBe(false)
+	})
+
+	it('with a gate, records a failure so an instantly-failing retry backs off exponentially', () => {
+		const tracked = new Map<string, boolean>()
+		const gate = new AppStateRetryGate()
+		expect(trackGatedCollection(tracked, 'regular', false, gate, 0)).toBe(1000)
+		expect(trackGatedCollection(tracked, 'regular', false, gate, 1000)).toBe(2000)
+		expect(trackGatedCollection(tracked, 'regular', false, gate, 3000)).toBe(4000)
 	})
 })

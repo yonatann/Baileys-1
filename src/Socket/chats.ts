@@ -47,6 +47,7 @@ import {
 	MAX_SYNC_ATTEMPTS,
 	newLTHashState,
 	partitionByRetryGate,
+	trackGatedCollection,
 	processSyncAction
 } from '../Utils'
 import { makeMutex } from '../Utils/make-mutex'
@@ -582,7 +583,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 					resyncAppState(names, isInitial).catch(error => {
 						// a thrown query() (timeout) must not drop the collections from tracking
 						if (!appStateSocketClosed) {
-							names.forEach(name => gatedCollections.set(name, isInitial))
+							names.forEach(name => trackGatedCollection(gatedCollections, name, isInitial, appStateRetryGate))
 							scheduleGatedRetry()
 						}
 
@@ -609,7 +610,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 			)
 			for (const { name, remainingMs } of deferred) {
 				logger.info({ name, remainingMs }, `${name} in sync backoff, deferring`)
-				gatedCollections.set(name, gatedCollections.get(name) || isInitialSync)
+				trackGatedCollection(gatedCollections, name, isInitialSync)
 			}
 
 			scheduleGatedRetry()
@@ -797,7 +798,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 									`failed to sync ${name} from v${states[name].version}, giving up (retry in ${cooldownMs}ms)`
 								)
 								collectionsToHandle.delete(name)
-								gatedCollections.set(name, isInitialSync)
+								trackGatedCollection(gatedCollections, name, isInitialSync)
 							} else {
 								logger.info(logData, `failed to sync ${name} from v${states[name].version}, forcing snapshot retry`)
 								// force a full snapshot on retry to recover from

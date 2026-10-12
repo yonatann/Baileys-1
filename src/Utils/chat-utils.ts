@@ -226,6 +226,22 @@ export const partitionByRetryGate = <T extends string>(
 	return { run, deferred }
 }
 
+/**
+ * Tracks a collection for a timer retry. An existing `isInitialSync=true` is never downgraded. With a gate
+ * (the retry itself rejected), a failure is recorded so a query() that fails instantly backs off
+ * exponentially instead of re-firing at the timer floor; returns the cooldown now in force.
+ */
+export const trackGatedCollection = <T extends string>(
+	tracked: Map<T, boolean>,
+	name: T,
+	isInitialSync: boolean,
+	gate?: AppStateRetryGate,
+	now = Date.now()
+): number => {
+	tracked.set(name, tracked.get(name) || isInitialSync)
+	return gate ? gate.recordFailure(name, now) : 0
+}
+
 export const encodeSyncdPatch = async (
 	{ type, index, syncAction, apiVersion, operation }: WAPatchCreate,
 	myAppStateKeyId: string,
