@@ -697,7 +697,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 				}
 			},
 			index: ['star', jid, key.id, key.fromMe ? '1' : '0', '0'],
-			type: 'regular_low',
+			type: 'regular_high',
 			apiVersion: 2,
 			operation: OP.SET
 		}
