@@ -351,6 +351,35 @@ export const decodeSyncdPatch = async (
 	return result
 }
 
+/**
+ * Throws if the server rejected our outgoing app-state patch at the COLLECTION level.
+ *
+ * `query()` only rejects on an IQ-level error; a rejected patch comes back as a successful result IQ with
+ * `<sync><collection name=".." type="error"><error code=".." text=".."/></collection></sync>`.
+ * Mirrors WA Web WAWebSyncdResponseParser (bundle wa-web-bundles-202610120949, b07@1268300..1271000):
+ *   409 -> Conflict (ConflictHasMore if has_more_patches): local state is behind, re-sync then retry
+ *   400 / 404 -> ErrorFatal
+ *   any other code -> ErrorRetry
+ * The caller must NOT commit the new local version/LTHash when this throws.
+ */
+export const assertAppPatchAccepted = (result: BinaryNode, name: WAPatchName) => {
+	const collections = getBinaryNodeChildren(getBinaryNodeChild(result, 'sync'), 'collection')
+	const node = collections.find(c => c.attrs.name === name)
+	if (!node || node.attrs.type !== 'error') {
+		return
+	}
+
+	const errorNode = getBinaryNodeChild(node, 'error')
+	const code = errorNode?.attrs?.code || '500'
+	const text = errorNode?.attrs?.text
+	const state = code === '409' ? 'conflict' : code === '400' || code === '404' ? 'fatal' : 'retry'
+	const statusCode = Number(code)
+	throw new Boom(`app state patch rejected for collection ${name}: ${code}${text ? ` ${text}` : ''}`, {
+		statusCode: Number.isFinite(statusCode) ? statusCode : 500,
+		data: { collection: name, code, state, hasMorePatches: node.attrs.has_more_patches === 'true' }
+	})
+}
+
 export const extractSyncdPatches = async (result: BinaryNode, options: RequestInit) => {
 	const syncNode = getBinaryNodeChild(result, 'sync')
 	const collectionNodes = getBinaryNodeChildren(syncNode, 'collection')

@@ -30,6 +30,7 @@ import type { QuickReplyAction } from '../Types/Bussines.js'
 import type { LabelActionBody } from '../Types/Label'
 import { SyncState } from '../Types/State'
 import {
+	assertAppPatchAccepted,
 	chatModificationToAppPatch,
 	type ChatMutationMap,
 	decodePatches,
@@ -951,7 +952,9 @@ export const makeChatsSocket = (config: SocketConfig) => {
 						}
 					]
 				}
-				await query(node)
+				const patchResult = await query(node)
+				// do not commit a version the server rejected (WA Web b07@1268300); the throw rolls back the transaction
+				assertAppPatchAccepted(patchResult, name)
 
 				await authState.keys.set({ 'app-state-sync-version': { [name]: state } })
 			}, authState?.creds?.me?.id || 'app-patch')
