@@ -424,11 +424,16 @@ const processMessage = async (
 						peerDataRequestSessionId: histNotification.peerDataRequestSessionId
 					})
 
-					// chunk fully handled -> now (and only now) the phone may be told it was applied (WA Web b07@572936)
+					// chunk downloaded+decoded and `messaging-history.set` emitted (bufferable: NOT yet flushed/persisted by consumers)
+					// -> now (and only now) the phone may be told it was applied (WA Web b07@572936)
 					try {
 						await onHistorySyncStored?.(histNotification, message)
 					} catch (err) {
-						logger?.warn({ err, id: message.key.id }, 'onHistorySyncStored callback failed')
+						// not rethrown: the chunk is already emitted; a lost receipt only means the phone may re-send
+						logger?.error(
+							{ err, id: message.key.id },
+							'onHistorySyncStored callback failed (hist_sync receipt not sent)'
+						)
 					}
 				}
 

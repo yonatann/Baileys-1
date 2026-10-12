@@ -1637,11 +1637,9 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		}
 	}
 
-	// same predicate chats.ts uses to decide whether a history chunk is processed
 	const historyAcker = createHistorySyncAcker({
-		isProcessable: n =>
-			config.shouldSyncHistoryMessage(n) &&
-			PROCESSABLE_HISTORY_TYPES.includes(n.syncType! as proto.HistorySync.HistorySyncType),
+		shouldSyncHistoryMessage: config.shouldSyncHistoryMessage,
+		processableTypes: PROCESSABLE_HISTORY_TYPES,
 		sendHistSyncReceipt: msg =>
 			sendReceipt(jidNormalizedUser(msg.key.remoteJid!), undefined, [msg.key.id!], 'hist_sync')
 	})

@@ -1,4 +1,6 @@
 import { jest } from '@jest/globals'
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import { deflateSync } from 'zlib'
 import { proto } from '../../../WAProto/index.js'
 import type { WAMessage } from '../../Types'
@@ -39,6 +41,8 @@ const makeCtx = (shouldProcessHistoryMsg: boolean, order: string[], extra: Recor
 		...extra
 	}
 }
+
+const ALL = Object.values(proto.HistorySync.HistorySyncType).filter((v): v is number => typeof v === 'number')
 
 describe('hist_sync receipt timing (WA Web b07@572936)', () => {
 	const T = proto.HistorySync.HistorySyncType
@@ -94,7 +98,8 @@ describe('hist_sync receipt timing (WA Web b07@572936)', () => {
 	const run = async (syncType: proto.HistorySync.HistorySyncType, processable: boolean, payload?: Buffer) => {
 		const order: string[] = []
 		const acker = createHistorySyncAcker({
-			isProcessable: () => processable,
+			shouldSyncHistoryMessage: () => processable,
+			processableTypes: ALL,
 			sendHistSyncReceipt: async () => {
 				order.push('RECEIPT')
 			}
@@ -135,8 +140,35 @@ describe('hist_sync receipt timing (WA Web b07@572936)', () => {
 
 	it('non-history message: acker is a no-op', async () => {
 		const send = jest.fn(async () => {})
-		const acker = createHistorySyncAcker({ isProcessable: () => true, sendHistSyncReceipt: send })
+		const acker = createHistorySyncAcker({
+			shouldSyncHistoryMessage: () => true,
+			processableTypes: ALL,
+			sendHistSyncReceipt: send
+		})
 		await acker.ackOnReceive({ key: { remoteJid: ME, id: 'X' }, message: { conversation: 'hi' } })
 		expect(send).not.toHaveBeenCalled()
+	})
+
+	it('predicate: unprocessable TYPE (not in processableTypes) is acked on receive', async () => {
+		const send = jest.fn(async () => {})
+		const acker = createHistorySyncAcker({
+			shouldSyncHistoryMessage: () => true,
+			processableTypes: [T.RECENT],
+			sendHistSyncReceipt: send
+		})
+		await acker.ackOnReceive(makeHistoryMsg(T.FULL, validPayload(T.FULL)))
+		expect(send).toHaveBeenCalledTimes(1)
+		await acker.ackOnReceive(makeHistoryMsg(T.RECENT, validPayload(T.RECENT)))
+		expect(send).toHaveBeenCalledTimes(1)
+	})
+
+	// Call-site guard: messages-recv must feed the acker into both receive-time and post-store paths.
+	it('messages-recv wires historyAcker.ackOnReceive + onStored and the config predicate', () => {
+		const src = readFileSync(join(process.cwd(), 'src/Socket/messages-recv.ts'), 'utf8')
+		expect(src).toContain('await historyAcker.ackOnReceive(msg)')
+		expect(src).toContain('onHistorySyncStored: historyAcker.onStored')
+		expect(src).toContain('shouldSyncHistoryMessage: config.shouldSyncHistoryMessage')
+		expect(src).toContain('processableTypes: PROCESSABLE_HISTORY_TYPES')
+		expect(src).not.toMatch(/sendReceipt\([^)]*'hist_sync'\)[\s\S]{0,40}TODO: investigate/)
 	})
 })

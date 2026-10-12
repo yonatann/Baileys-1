@@ -167,36 +167,49 @@ export const getHistoryMsg = (message: proto.IMessage) => {
  *    the late receipt at b07@572936 skips V3 precisely because it was already acked. -> ack on receive.
  *  - chunks we do NOT process (config `shouldSyncHistoryMessage` false / unprocessable type): WA Web has no
  *    skip-by-config; it would have processed + acked. Kept as ack-on-receive (unchanged pre-existing behaviour).
- *  - processed chunks: ack only AFTER download + decode + `messaging-history.set` (b07@572936, which in WA Web
- *    comes after handleProgressiveHistorySyncMsgs + setLastHistorySyncedChunk, i.e. after its DB writes).
- *    A download/decode failure throws before the hook, so NO receipt (WA Web: same).
+ *  - processed chunks: ack only AFTER download + decode + `messaging-history.set` was emitted (b07@572936; in WA Web
+ *    that point is after its DB writes, here it is only after the event was emitted/appended to the event buffer:
+ *    `messaging-history.set` is bufferable, so the receipt can go out before the buffer flushes (>=100ms) and before
+ *    any consumer persists it). A download/decode failure throws before the hook, so NO receipt (WA Web: same).
+ *    Unconfirmed vs WA Web: post-emit ack for ON_DEMAND / PUSH_NAME / NON_BLOCKING_DATA chunks.
+ *    A failed receipt send inside the hook is logged at error and NOT retried/propagated (the parent code threw
+ *    into handleMessage, which also dropped the upsert of the already-stored chunk; a missing receipt only means
+ *    the phone may re-send).
  * Known gap: WA Web also sends an encrypted error receipt on download failure (WAWebSendHistSyncServerErrorReceiptJob,
  * b07@558378/@581741); not implemented here.
  */
 export const createHistorySyncAcker = ({
-	isProcessable,
+	shouldSyncHistoryMessage,
+	processableTypes,
 	sendHistSyncReceipt
 }: {
-	isProcessable: (n: proto.Message.IHistorySyncNotification) => boolean
+	shouldSyncHistoryMessage: (n: proto.Message.IHistorySyncNotification) => boolean
+	processableTypes: readonly proto.HistorySync.HistorySyncType[]
 	sendHistSyncReceipt: (msg: WAMessage) => Promise<void>
-}) => ({
-	/** call when the message is received; acks immediately only for V3 and for chunks we will not process */
-	ackOnReceive: async (msg: WAMessage) => {
-		const n = getHistoryMsg(msg.message!)
-		if (!n) {
-			return
-		}
+}) => {
+	// same predicate chats.ts uses to decide whether a history chunk is processed
+	const isProcessable = (n: proto.Message.IHistorySyncNotification) =>
+		shouldSyncHistoryMessage(n) && processableTypes.includes(n.syncType! as proto.HistorySync.HistorySyncType)
 
-		if (n.syncType === proto.HistorySync.HistorySyncType.INITIAL_STATUS_V3 || !isProcessable(n)) {
+	return {
+		/** call when the message is received; acks immediately only for V3 and for chunks we will not process */
+		ackOnReceive: async (msg: WAMessage) => {
+			const n = getHistoryMsg(msg.message!)
+			if (!n) {
+				return
+			}
+
+			if (n.syncType === proto.HistorySync.HistorySyncType.INITIAL_STATUS_V3 || !isProcessable(n)) {
+				await sendHistSyncReceipt(msg)
+			}
+		},
+		/** `onHistorySyncStored` hook: acks processed chunks after store (V3 was already acked on receive) */
+		onStored: async (n: proto.Message.IHistorySyncNotification, msg: WAMessage) => {
+			if (n.syncType === proto.HistorySync.HistorySyncType.INITIAL_STATUS_V3) {
+				return
+			}
+
 			await sendHistSyncReceipt(msg)
 		}
-	},
-	/** `onHistorySyncStored` hook: acks processed chunks after store (V3 was already acked on receive) */
-	onStored: async (n: proto.Message.IHistorySyncNotification, msg: WAMessage) => {
-		if (n.syncType === proto.HistorySync.HistorySyncType.INITIAL_STATUS_V3) {
-			return
-		}
-
-		await sendHistSyncReceipt(msg)
 	}
-})
+}
