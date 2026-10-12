@@ -1,7 +1,7 @@
 /**
  * WA Web parity (FR2): AB prop `username_contact_display`, config code 4746 (bool, default true).
  * Evidence: WAWebABPropsConfigs (b09.js ~@311516) `username_contact_display:[4746,"bool",!0,!0]`;
- * WAWebUsernameGatingUtils (b06.js ~@3755434) `usernameDisplayedEnabled()` = getABPropConfigValue("username_contact_display") || isGuest.
+ * WAWebUsernameGatingUtils (b06.js module @3755282; getter e() @3755434) `usernameDisplayedEnabled()` = getABPropConfigValue("username_contact_display") || isGuest.
  * This module models ONLY the prop term of usernameDisplayedEnabled(). The isGuest disjunct (a WA Web browser-session
  * gatekeeper, gkx 10314) is not modelled here; the exposed field is named usernameContactDisplayProp to say so.
  * This value is display-only and does NOT participate in the LID-migration gate (WAIsAccountLidFieldMigrated).
