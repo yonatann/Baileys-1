@@ -43,6 +43,7 @@ import {
 	getStatusFromReceiptType,
 	resolveIncomingReceiptType,
 	collectServerSyncCollectionNames,
+	selectStaleServerSyncCollections,
 	extractAccountSyncDeviceSync,
 	reconcileOwnDevicesOnAccountSync,
 	isStringNullOrEmpty,
@@ -1080,13 +1081,27 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				break
 			case 'server_sync':
 				// WA Web parity (D2 / BE#662): resync ALL collections, not just the first.
-				const serverSyncCollections = collectServerSyncCollectionNames(node)
-				if (serverSyncCollections.length) {
-					logger.info(
-						{ parity: 'd2', count: serverSyncCollections.length, collections: serverSyncCollections },
-						'[waweb-parity][d2] server_sync resync collections'
+				// WA Web parity (C5): only those whose server version is newer than the local one
+				// (b07.js@1062818 U()/H()); an already-current collection costs no IQ.
+				const serverSyncCandidates = collectServerSyncCollectionNames(node)
+				if (serverSyncCandidates.length) {
+					const localSyncStates = await authState.keys.get('app-state-sync-version', serverSyncCandidates)
+					const serverSyncCollections = selectStaleServerSyncCollections(
+						node,
+						name => localSyncStates[name]?.version
 					)
-					await resyncAppState(serverSyncCollections, false)
+					logger.info(
+						{
+							parity: 'c5',
+							count: serverSyncCollections.length,
+							skipped: serverSyncCandidates.filter(name => !serverSyncCollections.includes(name)),
+							collections: serverSyncCollections
+						},
+						'[waweb-parity][c5] server_sync resync collections'
+					)
+					if (serverSyncCollections.length) {
+						await resyncAppState(serverSyncCollections, false)
+					}
 				}
 
 				break
