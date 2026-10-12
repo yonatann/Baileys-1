@@ -52,6 +52,8 @@ export interface GroupMetadata {
 	isCommunityAnnounce?: boolean
 	/** number of group participants */
 	size?: number
+	/** B8: the server sent only `{id,size}` for this big group (no participant list) — re-query it by id before use */
+	truncated?: boolean
 	// Baileys modified array
 	participants: GroupParticipant[]
 	ephemeralDuration?: number

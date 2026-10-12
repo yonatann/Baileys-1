@@ -3,6 +3,7 @@ import { proto } from '../../WAProto/index.js'
 import type { GroupMetadata, GroupParticipant, ParticipantAction, SocketConfig, WAMessageKey } from '../Types'
 import { WAMessageAddressingMode, WAMessageStubType } from '../Types'
 import { generateMessageIDV2, unixTimestampSeconds } from '../Utils'
+import { coalesceInflight, resolveTruncatedGroups } from '../Utils/group-fetch'
 import {
 	type BinaryNode,
 	getBinaryNodeChild,
@@ -35,7 +36,7 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 		return extractGroupMetadata(result)
 	}
 
-	const groupFetchAllParticipating = async () => {
+	const fetchAllParticipating = async () => {
 		const result = await query({
 			tag: 'iq',
 			attrs: {
@@ -58,12 +59,20 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 		const groupsChild = getBinaryNodeChild(result, 'groups')
 		if (groupsChild) {
 			const groups = getBinaryNodeChildren(groupsChild, 'group')
+			const parsed: GroupMetadata[] = []
 			for (const groupNode of groups) {
-				const meta = extractGroupMetadata({
-					tag: 'result',
-					attrs: {},
-					content: [groupNode]
-				})
+				parsed.push(
+					extractGroupMetadata({
+						tag: 'result',
+						attrs: {},
+						content: [groupNode]
+					})
+				)
+			}
+
+			for (const meta of await resolveTruncatedGroups(parsed, groupMetadata, (jid, err) =>
+				logger.warn({ jid, err }, '[waweb-parity][b8] truncated group re-fetch failed; omitted')
+			)) {
 				data[meta.id] = meta
 			}
 		}
@@ -73,6 +82,9 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 
 		return data
 	}
+
+	// B8: the connect-time seed and the `dirty groups` handler fire together right after login — one IQ.
+	const groupFetchAllParticipating = coalesceInflight(fetchAllParticipating)
 
 	sock.ws.on('CB:ib,,dirty', async (node: BinaryNode) => {
 		const { attrs } = getBinaryNodeChild(node, 'dirty')!
@@ -348,6 +360,8 @@ export const extractGroupMetadata = (result: BinaryNode) => {
 		subjectOwnerUsername: group.attrs.s_o_username,
 		subjectTime: +group.attrs.s_t!,
 		size: group.attrs.size ? +group.attrs.size : getBinaryNodeChildren(group, 'participant').length,
+		// WA Web parity (B8): <group truncated="true" size=N/> carries no participants (WASmaxInGroupsTruncatedGroupInfoMixin)
+		...(group.attrs.truncated === 'true' ? { truncated: true } : {}),
 		creation: +group.attrs.creation!,
 		owner: group.attrs.creator ? jidNormalizedUser(group.attrs.creator) : undefined,
 		ownerPn: group.attrs.creator_pn ? jidNormalizedUser(group.attrs.creator_pn) : undefined,
