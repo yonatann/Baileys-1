@@ -1002,7 +1002,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 			await authState.keys.transaction(async () => {
 				logger.debug({ patch: patchCreate }, 'applying app patch')
 
-				await resyncAppState([name], false)
+				await resyncAppState([name], false, { bypassGate: true })
 
 				const { [name]: currentSyncVersion } = await authState.keys.get('app-state-sync-version', [name])
 				initial = currentSyncVersion ? ensureLTHashStateVersion(currentSyncVersion) : newLTHashState()
