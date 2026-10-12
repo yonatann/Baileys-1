@@ -31,6 +31,7 @@ import type { LabelActionBody } from '../Types/Label'
 import { SyncState } from '../Types/State'
 import {
 	chatModificationToAppPatch,
+	commitAppPatch,
 	type ChatMutationMap,
 	decodePatches,
 	decodeSyncdSnapshot,
@@ -905,22 +906,17 @@ export const makeChatsSocket = (config: SocketConfig) => {
 			throw new Boom('App state key not present!', { statusCode: 400 })
 		}
 
-		let initial: LTHashState
-		let encodeResult: { patch: proto.ISyncdPatch; state: LTHashState }
+		let committed: Awaited<ReturnType<typeof commitAppPatch>> | undefined
 
 		await appStatePatchMutex.mutex(async () => {
-			await authState.keys.transaction(async () => {
-				logger.debug({ patch: patchCreate }, 'applying app patch')
-
-				await resyncAppState([name], false)
-
-				const { [name]: currentSyncVersion } = await authState.keys.get('app-state-sync-version', [name])
-				initial = currentSyncVersion ? ensureLTHashStateVersion(currentSyncVersion) : newLTHashState()
-
-				encodeResult = await encodeSyncdPatch(patchCreate, myAppStateKeyId, initial, getAppStateSyncKey)
-				const { patch, state } = encodeResult
-
-				const node: BinaryNode = {
+			logger.debug({ patch: patchCreate }, 'applying app patch')
+			committed = await commitAppPatch({
+				name,
+				keys: authState.keys,
+				transactionKey: authState?.creds?.me?.id || 'app-patch',
+				resync: () => resyncAppState([name], false),
+				encode: initial => encodeSyncdPatch(patchCreate, myAppStateKeyId, initial, getAppStateSyncKey),
+				buildNode: (patch, state) => ({
 					tag: 'iq',
 					attrs: {
 						to: S_WHATSAPP_NET,
@@ -950,19 +946,17 @@ export const makeChatsSocket = (config: SocketConfig) => {
 							]
 						}
 					]
-				}
-				await query(node)
-
-				await authState.keys.set({ 'app-state-sync-version': { [name]: state } })
-			}, authState?.creds?.me?.id || 'app-patch')
+				}),
+				query
+			})
 		})
 
 		if (config.emitOwnEvents) {
 			const { onMutation } = newAppStateChunkHandler(false)
 			const { mutationMap } = await decodePatches(
 				name,
-				[{ ...encodeResult!.patch, version: { version: encodeResult!.state.version } }],
-				initial!,
+				[{ ...committed!.patch, version: { version: committed!.state.version } }],
+				committed!.initial,
 				getAppStateSyncKey,
 				config.options,
 				undefined,

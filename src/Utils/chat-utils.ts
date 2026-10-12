@@ -351,6 +351,87 @@ export const decodeSyncdPatch = async (
 	return result
 }
 
+/**
+ * Throws if the server rejected our outgoing app-state patch at the COLLECTION level.
+ *
+ * `query()` only rejects on an IQ-level error; a rejected patch comes back as a successful result IQ with
+ * `<sync><collection name=".." type="error"><error code=".." text=".."/></collection></sync>`.
+ * Mirrors WA Web WAWebSyncdResponseParser (bundle wa-web-bundles-202610120949, b07@1268300..1271000):
+ *   409 -> Conflict (ConflictHasMore if has_more_patches is present, hasAttr): local state is behind, re-sync then retry
+ *   400 / 404 -> ErrorFatal
+ *   any other code -> ErrorRetry
+ * The caller must NOT commit the new local version/LTHash when this throws.
+ */
+export const assertAppPatchAccepted = (result: BinaryNode, name: WAPatchName) => {
+	const collections = getBinaryNodeChildren(getBinaryNodeChild(result, 'sync'), 'collection')
+	const node = collections.find(c => c.attrs.name === name)
+	if (!node || node.attrs.type !== 'error') {
+		return
+	}
+
+	const errorNode = getBinaryNodeChild(node, 'error')
+	const code = errorNode?.attrs?.code || '500'
+	const text = errorNode?.attrs?.text
+	const state = code === '409' ? 'conflict' : code === '400' || code === '404' ? 'fatal' : 'retry'
+	const statusCode = Number(code)
+	throw new Boom(`app state patch rejected for collection ${name}: ${code}${text ? ` ${text}` : ''}`, {
+		statusCode: Number.isFinite(statusCode) ? statusCode : 500,
+		data: { collection: name, code, state, hasMorePatches: node.attrs.has_more_patches !== undefined }
+	})
+}
+
+export const MAX_APP_PATCH_ATTEMPTS = 3
+
+/**
+ * Pre-sync, encode, send and (only if accepted) commit one app-state patch.
+ *
+ * - The pre-sync runs in its OWN committed transaction (resyncAppState opens its own), so a rejected patch
+ *   does not roll back / re-emit already-applied remote mutations.
+ * - The version is committed only if the collection was accepted (assertAppPatchAccepted); a throw aborts the
+ *   patch transaction.
+ * - On Conflict, WA Web (b07@1275675) re-fetches the collection when it still has pending local mutations and
+ *   re-applies them; with none pending it is Success. A Baileys patch is always pending, so: re-sync, re-encode
+ *   against the new state, re-send, bounded by `maxAttempts`, then throw. Fatal (400/404) / retry (other) codes
+ *   are thrown immediately.
+ */
+export const commitAppPatch = async (opts: {
+	name: WAPatchName
+	keys: {
+		transaction: <T>(exec: () => Promise<T>, key: string) => Promise<T>
+		get: (type: 'app-state-sync-version', ids: string[]) => { [id: string]: LTHashState | undefined } | Promise<{ [id: string]: LTHashState | undefined }>
+		set: (data: { 'app-state-sync-version': { [name: string]: LTHashState } }) => void | Promise<void>
+	}
+	transactionKey: string
+	resync: () => Promise<void>
+	encode: (initial: LTHashState) => Promise<{ patch: proto.ISyncdPatch; state: LTHashState }>
+	buildNode: (patch: proto.ISyncdPatch, state: LTHashState) => BinaryNode
+	query: (node: BinaryNode) => Promise<BinaryNode>
+	maxAttempts?: number
+}) => {
+	const { name, keys, resync, encode, buildNode, query, transactionKey } = opts
+	const maxAttempts = opts.maxAttempts ?? MAX_APP_PATCH_ATTEMPTS
+	for (let attempt = 1; ; attempt++) {
+		await resync()
+		try {
+			return await keys.transaction(async () => {
+				const { [name]: currentSyncVersion } = await keys.get('app-state-sync-version', [name])
+				const initial = currentSyncVersion ? ensureLTHashStateVersion(currentSyncVersion) : newLTHashState()
+				const encodeResult = await encode(initial)
+				const result = await query(buildNode(encodeResult.patch, encodeResult.state))
+				assertAppPatchAccepted(result, name)
+				await keys.set({ 'app-state-sync-version': { [name]: encodeResult.state } })
+				return { ...encodeResult, initial }
+			}, transactionKey)
+		} catch (error: any) {
+			if (error?.data?.state === 'conflict' && attempt < maxAttempts) {
+				continue
+			}
+
+			throw error
+		}
+	}
+}
+
 export const extractSyncdPatches = async (result: BinaryNode, options: RequestInit) => {
 	const syncNode = getBinaryNodeChild(result, 'sync')
 	const collectionNodes = getBinaryNodeChildren(syncNode, 'collection')
