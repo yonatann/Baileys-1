@@ -154,6 +154,8 @@ export const MIN_PREKEY_COUNT = 5
 export const INITIAL_PREKEY_COUNT = 812
 
 export const UPLOAD_TIMEOUT = 30000 // 30 seconds
+/** WA Web DEFAULT_MAX_PASSIVE_MODE_TIME_MS (b06.js WAWebPassiveModeManager): passive tasks run at offline-end or after 60s */
+export const PASSIVE_TASK_FALLBACK_MS = 60_000
 
 export const TimeMs = {
 	Minute: 60 * 1000,

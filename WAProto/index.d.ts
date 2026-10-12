@@ -7848,6 +7848,7 @@ export namespace proto {
                 onDemandMsgCount?: (number|null);
                 oldestMsgTimestampMs?: (number|Long|null);
                 accountLid?: (string|null);
+                supportInlineResponse?: (boolean|null);
             }
 
             class HistorySyncOnDemandRequest implements IHistorySyncOnDemandRequest {
@@ -7858,6 +7859,7 @@ export namespace proto {
                 public onDemandMsgCount?: (number|null);
                 public oldestMsgTimestampMs?: (number|Long|null);
                 public accountLid?: (string|null);
+                public supportInlineResponse?: (boolean|null);
                 public static create(properties?: proto.Message.PeerDataOperationRequestMessage.IHistorySyncOnDemandRequest): proto.Message.PeerDataOperationRequestMessage.HistorySyncOnDemandRequest;
                 public static encode(m: proto.Message.PeerDataOperationRequestMessage.IHistorySyncOnDemandRequest, w?: $protobuf.Writer): $protobuf.Writer;
                 public static decode(r: ($protobuf.Reader|Uint8Array), l?: number): proto.Message.PeerDataOperationRequestMessage.HistorySyncOnDemandRequest;

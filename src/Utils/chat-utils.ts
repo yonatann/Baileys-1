@@ -142,6 +142,48 @@ export const ensureLTHashStateVersion = (state: LTHashState): LTHashState => {
 
 export const MAX_SYNC_ATTEMPTS = 2
 
+// WA Web retry schedule for a failing collection (WAWebSyncd b07@1068624, WAWebSyncdConst b08@1125583):
+//   delay = min(max(BASE ** retryIndex * MIN, serverBackoff), MAX), BASE=2, MIN=1s, MAX=1h
+export const APP_STATE_BACKOFF_MIN_MS = 1000
+export const APP_STATE_BACKOFF_MAX_MS = 60 * 60 * 1000
+export const APP_STATE_BACKOFF_BASE = 2
+
+/** Delay before retry number `retryIndex` (0 = first retry) of a failed collection sync. */
+export const appStateRetryBackoffMs = (retryIndex: number, serverBackoffMs = 0): number => {
+	const n = Number.isFinite(retryIndex) && retryIndex > 0 ? Math.floor(retryIndex) : 0
+	// Math.pow overflows to Infinity for huge n, which Math.min still caps
+	const exp = Math.pow(APP_STATE_BACKOFF_BASE, n) * APP_STATE_BACKOFF_MIN_MS
+	const floor = Number.isFinite(serverBackoffMs) && serverBackoffMs > 0 ? serverBackoffMs : 0
+	return Math.min(Math.max(exp, floor), APP_STATE_BACKOFF_MAX_MS)
+}
+
+/**
+ * Cross-call cooldown for collections whose sync just gave up. WA Web keeps a failed collection in
+ * FailingFiniteRetry and re-tries it on the backoff timer above; without this, every server_sync /
+ * reconnect re-fetched (and snapshot-forced) a persistently failing collection immediately.
+ * In-memory only: a new socket starts clean.
+ */
+export class AppStateRetryGate {
+	private readonly state = new Map<string, { failures: number; until: number }>()
+
+	/** Records a failure, returns the cooldown now in force (ms). */
+	recordFailure(name: string, now: number): number {
+		const failures = this.state.get(name)?.failures ?? 0
+		const wait = appStateRetryBackoffMs(failures)
+		this.state.set(name, { failures: failures + 1, until: now + wait })
+		return wait
+	}
+
+	recordSuccess(name: string): void {
+		this.state.delete(name)
+	}
+
+	/** Milliseconds until `name` may sync again (0 = now). */
+	remainingMs(name: string, now: number): number {
+		return Math.max(0, (this.state.get(name)?.until ?? 0) - now)
+	}
+}
+
 /**
  * Check if an error is a missing app state sync key.
  * WA Web treats these as "Blocked" (waits for key arrival), not fatal.
@@ -158,6 +200,46 @@ export const isMissingKeyError = (error: any): boolean => {
  */
 export const isAppStateSyncIrrecoverable = (error: any, attempts: number): boolean => {
 	return attempts >= MAX_SYNC_ATTEMPTS || error?.name === 'TypeError'
+}
+
+/**
+ * Splits a resync request by the retry gate. `bypass` (explicit user writes such as appPatch, which must
+ * fetch the latest state before encoding) runs everything: a silent no-op there would send a patch on stale state.
+ */
+export const partitionByRetryGate = <T extends string>(
+	requested: readonly T[],
+	gate: AppStateRetryGate,
+	now: number,
+	bypass = false
+): { run: T[]; deferred: { name: T; remainingMs: number }[] } => {
+	const run: T[] = []
+	const deferred: { name: T; remainingMs: number }[] = []
+	for (const name of requested) {
+		const remainingMs = bypass ? 0 : gate.remainingMs(name, now)
+		if (remainingMs > 0) {
+			deferred.push({ name, remainingMs })
+		} else {
+			run.push(name)
+		}
+	}
+
+	return { run, deferred }
+}
+
+/**
+ * Tracks a collection for a timer retry. An existing `isInitialSync=true` is never downgraded. With a gate
+ * (the retry itself rejected), a failure is recorded so a query() that fails instantly backs off
+ * exponentially instead of re-firing at the timer floor; returns the cooldown now in force.
+ */
+export const trackGatedCollection = <T extends string>(
+	tracked: Map<T, boolean>,
+	name: T,
+	isInitialSync: boolean,
+	gate?: AppStateRetryGate,
+	now = Date.now()
+): number => {
+	tracked.set(name, tracked.get(name) || isInitialSync)
+	return gate ? gate.recordFailure(name, now) : 0
 }
 
 export const encodeSyncdPatch = async (
@@ -349,6 +431,87 @@ export const decodeSyncdPatch = async (
 
 	const result = await decodeSyncdMutations(msg.mutations!, initialState, getAppStateSyncKey, onMutation, validateMacs)
 	return result
+}
+
+/**
+ * Throws if the server rejected our outgoing app-state patch at the COLLECTION level.
+ *
+ * `query()` only rejects on an IQ-level error; a rejected patch comes back as a successful result IQ with
+ * `<sync><collection name=".." type="error"><error code=".." text=".."/></collection></sync>`.
+ * Mirrors WA Web WAWebSyncdResponseParser (bundle wa-web-bundles-202610120949, b07@1268300..1271000):
+ *   409 -> Conflict (ConflictHasMore if has_more_patches is present, hasAttr): local state is behind, re-sync then retry
+ *   400 / 404 -> ErrorFatal
+ *   any other code -> ErrorRetry
+ * The caller must NOT commit the new local version/LTHash when this throws.
+ */
+export const assertAppPatchAccepted = (result: BinaryNode, name: WAPatchName) => {
+	const collections = getBinaryNodeChildren(getBinaryNodeChild(result, 'sync'), 'collection')
+	const node = collections.find(c => c.attrs.name === name)
+	if (!node || node.attrs.type !== 'error') {
+		return
+	}
+
+	const errorNode = getBinaryNodeChild(node, 'error')
+	const code = errorNode?.attrs?.code || '500'
+	const text = errorNode?.attrs?.text
+	const state = code === '409' ? 'conflict' : code === '400' || code === '404' ? 'fatal' : 'retry'
+	const statusCode = Number(code)
+	throw new Boom(`app state patch rejected for collection ${name}: ${code}${text ? ` ${text}` : ''}`, {
+		statusCode: Number.isFinite(statusCode) ? statusCode : 500,
+		data: { collection: name, code, state, hasMorePatches: node.attrs.has_more_patches !== undefined }
+	})
+}
+
+export const MAX_APP_PATCH_ATTEMPTS = 3
+
+/**
+ * Pre-sync, encode, send and (only if accepted) commit one app-state patch.
+ *
+ * - The pre-sync runs in its OWN committed transaction (resyncAppState opens its own), so a rejected patch
+ *   does not roll back / re-emit already-applied remote mutations.
+ * - The version is committed only if the collection was accepted (assertAppPatchAccepted); a throw aborts the
+ *   patch transaction.
+ * - On Conflict, WA Web (b07@1275675) re-fetches the collection when it still has pending local mutations and
+ *   re-applies them; with none pending it is Success. A Baileys patch is always pending, so: re-sync, re-encode
+ *   against the new state, re-send, bounded by `maxAttempts`, then throw. Fatal (400/404) / retry (other) codes
+ *   are thrown immediately.
+ */
+export const commitAppPatch = async (opts: {
+	name: WAPatchName
+	keys: {
+		transaction: <T>(exec: () => Promise<T>, key: string) => Promise<T>
+		get: (type: 'app-state-sync-version', ids: string[]) => { [id: string]: LTHashState | undefined } | Promise<{ [id: string]: LTHashState | undefined }>
+		set: (data: { 'app-state-sync-version': { [name: string]: LTHashState } }) => void | Promise<void>
+	}
+	transactionKey: string
+	resync: () => Promise<void>
+	encode: (initial: LTHashState) => Promise<{ patch: proto.ISyncdPatch; state: LTHashState }>
+	buildNode: (patch: proto.ISyncdPatch, state: LTHashState) => BinaryNode
+	query: (node: BinaryNode) => Promise<BinaryNode>
+	maxAttempts?: number
+}) => {
+	const { name, keys, resync, encode, buildNode, query, transactionKey } = opts
+	const maxAttempts = opts.maxAttempts ?? MAX_APP_PATCH_ATTEMPTS
+	for (let attempt = 1; ; attempt++) {
+		await resync()
+		try {
+			return await keys.transaction(async () => {
+				const { [name]: currentSyncVersion } = await keys.get('app-state-sync-version', [name])
+				const initial = currentSyncVersion ? ensureLTHashStateVersion(currentSyncVersion) : newLTHashState()
+				const encodeResult = await encode(initial)
+				const result = await query(buildNode(encodeResult.patch, encodeResult.state))
+				assertAppPatchAccepted(result, name)
+				await keys.set({ 'app-state-sync-version': { [name]: encodeResult.state } })
+				return { ...encodeResult, initial }
+			}, transactionKey)
+		} catch (error: any) {
+			if (error?.data?.state === 'conflict' && attempt < maxAttempts) {
+				continue
+			}
+
+			throw error
+		}
+	}
 }
 
 export const extractSyncdPatches = async (result: BinaryNode, options: RequestInit) => {

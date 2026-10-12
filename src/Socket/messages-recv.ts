@@ -6,7 +6,7 @@ import { proto } from '../../WAProto/index.js'
 import {
 	DEFAULT_CACHE_TTLS,
 	KEY_BUNDLE_TYPE,
-	MIN_PREKEY_COUNT,
+	INITIAL_PREKEY_COUNT,
 	PLACEHOLDER_MAX_AGE_SECONDS,
 	PROCESSABLE_HISTORY_TYPES,
 	STATUS_EXPIRY_SECONDS
@@ -41,7 +41,9 @@ import {
 	getCallStatusFromNode,
 	getNextPreKeys,
 	getStatusFromReceiptType,
+	resolveIncomingReceiptType,
 	collectServerSyncCollectionNames,
+	selectStaleServerSyncCollections,
 	extractAccountSyncDeviceSync,
 	reconcileOwnDevicesOnAccountSync,
 	isStringNullOrEmpty,
@@ -49,7 +51,9 @@ import {
 	hkdf,
 	MISSING_KEYS_ERROR_TEXT,
 	NACK_REASONS,
+	dispatchAccountSyncDirtyProtocols,
 	NO_MESSAGE_FOUND_ERROR_TEXT,
+	buildHistorySyncOnDemandRequest,
 	SERVER_ERROR_CODES,
 	createHistorySyncAcker,
 	toNumber,
@@ -57,6 +61,7 @@ import {
 	xmppPreKey,
 	xmppSignedPreKey
 } from '../Utils'
+import { classifyServerEncryptNotification, runPreKeyLow } from '../Utils/login-traffic-policy'
 import { makeMutex } from '../Utils/make-mutex'
 import { buildHistSyncServerErrorReceiptNode } from '../Utils/messages-media'
 import { makeOfflineNodeProcessor, type MessageType } from '../Utils/offline-node-processor'
@@ -135,11 +140,13 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		relayMessage,
 		sendReceipt,
 		uploadPreKeys,
+		digestKeyBundle,
 		sendPeerDataOperationMessage,
 		getUSyncDevices,
 		messageRetryManager,
 		registerSocketEndHandler,
 		issuePrivacyTokens,
+		fetchPrivacySettings,
 		fetchAccountReachoutTimelock,
 		placeholderResendCache
 	} = sock
@@ -165,25 +172,23 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	// Debounce identity-change session refreshes per JID to avoid bursts
 	const identityAssertDebounce = new NodeCache<boolean>({ stdTTL: 5, useClones: false })
 
-	let sendActiveReceipts = false
-
 	const fetchMessageHistory = async (
 		count: number,
 		oldestMsgKey: WAMessageKey,
-		oldestMsgTimestamp: number | Long
+		oldestMsgTimestamp: number | Long,
+		supportInlineResponse?: boolean
 	): Promise<string> => {
 		if (!authState.creds.me?.id) {
 			throw new Boom('Not authenticated')
 		}
 
 		const pdoMessage: proto.Message.IPeerDataOperationRequestMessage = {
-			historySyncOnDemandRequest: {
-				chatJid: oldestMsgKey.remoteJid,
-				oldestMsgFromMe: oldestMsgKey.fromMe,
-				oldestMsgId: oldestMsgKey.id,
-				oldestMsgTimestampMs: oldestMsgTimestamp,
-				onDemandMsgCount: count
-			},
+			historySyncOnDemandRequest: buildHistorySyncOnDemandRequest({
+				count,
+				oldestMsgKey,
+				oldestMsgTimestamp,
+				supportInlineResponse
+			}),
 			peerDataOperationRequestType: proto.Message.PeerDataOperationRequestType.HISTORY_SYNC_ON_DEMAND
 		}
 
@@ -770,23 +775,30 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		const from = node.attrs.from
 		if (from === S_WHATSAPP_NET) {
 			const stanzaId = node.attrs.id
-			if (stanzaId && inFlightPreKeyLow.has(stanzaId)) {
+			const kind = classifyServerEncryptNotification(node)
+			if (kind === 'digest') {
+				// WA Web parity (B5, WAWebHandleDigestKey): the digest is server-requested, not a login poll.
+				try {
+					await digestKeyBundle()
+				} catch (e) {
+					logger.warn({ e }, 'failed to run server-requested key digest')
+				}
+
 				return
 			}
 
-			const countChild = getBinaryNodeChild(node, 'count')
-			const count = +countChild!.attrs.value!
-			const shouldUploadMorePreKeys = count < MIN_PREKEY_COUNT
-
-			logger.debug({ count, shouldUploadMorePreKeys }, 'recv pre-key count')
-			if (shouldUploadMorePreKeys) {
-				if (stanzaId) inFlightPreKeyLow.add(stanzaId)
-				try {
-					await uploadPreKeys()
-				} finally {
-					if (stanzaId) inFlightPreKeyLow.delete(stanzaId)
-				}
+			if (kind !== 'prekey_low') {
+				logger.debug({ node }, 'ignoring server encrypt notification without <count>/<digest>')
+				return
 			}
+
+			logger.debug({ count: getBinaryNodeChild(node, 'count')?.attrs.value }, 'recv pre-key low notification')
+			await runPreKeyLow({
+				stanzaId,
+				inFlight: inFlightPreKeyLow,
+				upload: uploadPreKeys,
+				count: INITIAL_PREKEY_COUNT
+			})
 		} else {
 			const result = await handleIdentityChange(node, {
 				meId: authState.creds.me?.id,
@@ -1072,13 +1084,27 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				break
 			case 'server_sync':
 				// WA Web parity (D2 / BE#662): resync ALL collections, not just the first.
-				const serverSyncCollections = collectServerSyncCollectionNames(node)
-				if (serverSyncCollections.length) {
-					logger.info(
-						{ parity: 'd2', count: serverSyncCollections.length, collections: serverSyncCollections },
-						'[waweb-parity][d2] server_sync resync collections'
+				// WA Web parity (C5): only those whose server version is newer than the local one
+				// (b07.js@1062818 U()/H()); an already-current collection costs no IQ.
+				const serverSyncCandidates = collectServerSyncCollectionNames(node)
+				if (serverSyncCandidates.length) {
+					const localSyncStates = await authState.keys.get('app-state-sync-version', serverSyncCandidates)
+					const serverSyncCollections = selectStaleServerSyncCollections(
+						node,
+						name => localSyncStates[name]?.version
 					)
-					await resyncAppState(serverSyncCollections, false)
+					logger.info(
+						{
+							parity: 'c5',
+							count: serverSyncCollections.length,
+							skipped: serverSyncCandidates.filter(name => !serverSyncCollections.includes(name)),
+							collections: serverSyncCollections
+						},
+						'[waweb-parity][c5] server_sync resync collections'
+					)
+					if (serverSyncCollections.length) {
+						await resyncAppState(serverSyncCollections, false)
+					}
 				}
 
 				break
@@ -1155,6 +1181,13 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 							}
 						}
 					})
+				} else if (child!.tag === 'privacy') {
+					// WA Web parity (B7, b07@499300): privacy changes arrive as account_sync pushes
+					await dispatchAccountSyncDirtyProtocols(
+						['privacy'],
+						{ fetchPrivacy: fetchPrivacySettings, fetchBlocklist: async () => undefined },
+						(_p, error) => logger.warn({ error }, 'failed to refresh privacy settings after account_sync')
+					)
 				} else if (child!.tag === 'blocklist') {
 					const blocklists = getBinaryNodeChildren(child, 'item')
 
@@ -1172,7 +1205,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				// link_code_companion_reg notifications during pairing. Only stage=primary_hello carries the
 				// primary keys; an interleaved stage=refresh_code has only link_code_pairing_ref. Processing it
 				// blindly hit toRequiredBuffer(undefined) -> "Invalid buffer" and pairing never completed.
-				if(linkCodeCompanionReg?.attrs?.stage !== 'primary_hello') {
+				if (linkCodeCompanionReg?.attrs?.stage !== 'primary_hello') {
 					break
 				}
 				const ref = toRequiredBuffer(getBinaryNodeChildBuffer(linkCodeCompanionReg, 'link_code_pairing_ref'))
@@ -1802,20 +1835,17 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 					const isNewsletter = isJidNewsletter(msg.key.remoteJid!)
 					if (!isNewsletter) {
 						// no type in the receipt => message delivered
-						let type: MessageReceiptType = undefined
+						const type: MessageReceiptType = resolveIncomingReceiptType({
+							category,
+							fromMe: msg.key.fromMe,
+							message: msg.message
+						})
 						let participant = msg.key.participant
-						if (category === 'peer') {
-							// special peer message
-							type = 'peer_msg'
-						} else if (msg.key.fromMe) {
-							// message was sent by us from a different device
-							type = 'sender'
-							// need to specially handle this case
+						if (type === 'sender') {
+							// message was sent by us from a different device; need to specially handle this case
 							if (isLidUser(msg.key.remoteJid!) || isLidUser(msg.key.remoteJidAlt)) {
 								participant = author // TODO: investigate sending receipts to LIDs and not PNs
 							}
-						} else if (!sendActiveReceipts) {
-							type = 'inactive'
 						}
 
 						acked = true
@@ -2115,11 +2145,6 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	const inFlight463Recoveries = new Set<string>()
 
 	ev.on('connection.update', ({ isOnline, connection }) => {
-		if (typeof isOnline !== 'undefined') {
-			sendActiveReceipts = isOnline
-			logger.trace(`sendActiveReceipts set to "${sendActiveReceipts}"`)
-		}
-
 		// Flush pending tctoken index save on disconnect to avoid writing after close
 		if (connection === 'close' && tcTokenIndexTimer) {
 			clearTimeout(tcTokenIndexTimer)
@@ -2155,7 +2180,6 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		}
 
 		identityAssertDebounce.close()
-		sendActiveReceipts = false
 	})
 
 	async function pruneExpiredTcTokens() {

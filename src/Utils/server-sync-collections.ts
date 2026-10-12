@@ -32,3 +32,35 @@ export function collectServerSyncCollectionNames(node: BinaryNode): WAPatchName[
 
 	return names
 }
+
+/**
+ * WA Web parity (C5): WA Web does not resync every collection named in a `server_sync`
+ * notification. `WAWebSyncd` U()/H() (b07.js@1062818) keeps a collection only when its
+ * local version is missing, the notification carries no server version, or
+ * `localV < serverV`; a collection already at/past the server version is skipped.
+ *
+ * `localVersionOf` returns the locally stored app-state version for a collection
+ * (`undefined` when no state is stored). Unknown names are dropped as in
+ * {@link collectServerSyncCollectionNames}.
+ */
+export function selectStaleServerSyncCollections(
+	node: BinaryNode,
+	localVersionOf: (name: WAPatchName) => number | undefined
+): WAPatchName[] {
+	const stale: WAPatchName[] = []
+	for (const name of collectServerSyncCollectionNames(node)) {
+		const collection = getBinaryNodeChildren(node, 'collection').find(c => c.attrs.name === name)
+		// An empty, whitespace-only or non-numeric version is "no server version" (WA Web: serverV
+		// undefined -> sync), not 0: Number('') === 0 would wrongly skip a stale collection.
+		const rawVersion = collection?.attrs.version?.trim()
+		const parsedVersion = rawVersion ? Number(rawVersion) : Number.NaN
+		const serverVersion = Number.isFinite(parsedVersion) ? parsedVersion : undefined
+		const localVersion = localVersionOf(name)
+
+		if (localVersion === undefined || serverVersion === undefined || localVersion < serverVersion) {
+			stale.push(name)
+		}
+	}
+
+	return stale
+}

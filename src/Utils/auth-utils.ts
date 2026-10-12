@@ -369,6 +369,7 @@ export const initAuthCreds = (): AuthenticationCreds => {
 		processedHistoryMessages: [],
 		nextPreKeyId: 1,
 		firstUnuploadedPreKeyId: 1,
+		serverHasPreKeys: false,
 		accountSyncCounter: 0,
 		registeredLoginCount: 0,
 		accountSettings: {
