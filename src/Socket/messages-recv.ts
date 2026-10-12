@@ -49,6 +49,7 @@ import {
 	hkdf,
 	MISSING_KEYS_ERROR_TEXT,
 	NACK_REASONS,
+	dispatchAccountSyncDirtyProtocols,
 	NO_MESSAGE_FOUND_ERROR_TEXT,
 	SERVER_ERROR_CODES,
 	toNumber,
@@ -1155,13 +1156,12 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						}
 					})
 				} else if (child!.tag === 'privacy') {
-					// WA Web parity (B7): privacy changes arrive as account_sync pushes (forceUpdatePrivacySettings)
-					// instead of a refetch on every open
-					try {
-						await fetchPrivacySettings(true)
-					} catch (error) {
-						logger.warn({ error }, 'failed to refresh privacy settings after account_sync')
-					}
+					// WA Web parity (B7, b07@499300): privacy changes arrive as account_sync pushes
+					await dispatchAccountSyncDirtyProtocols(
+						['privacy'],
+						{ fetchPrivacy: fetchPrivacySettings, fetchBlocklist: async () => undefined },
+						(_p, error) => logger.warn({ error }, 'failed to refresh privacy settings after account_sync')
+					)
 				} else if (child!.tag === 'blocklist') {
 					const blocklists = getBinaryNodeChildren(child, 'item')
 

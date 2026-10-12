@@ -45,12 +45,13 @@ import {
 	newLTHashState,
 	processSyncAction
 } from '../Utils'
-import { clampAbPropsRefreshSec, planInitQueries } from '../Utils/init-queries'
+import { clampAbPropsRefreshSec, dispatchAccountSyncDirtyProtocols, planInitQueries } from '../Utils/init-queries'
 import { makeMutex } from '../Utils/make-mutex'
 import processMessage from '../Utils/process-message'
 import { buildTcTokenFromJid } from '../Utils/tc-token-utils'
 import {
 	type BinaryNode,
+	getAllBinaryNodeChildren,
 	getBinaryNodeChild,
 	getBinaryNodeChildren,
 	isHostedLidUser,
@@ -1367,6 +1368,13 @@ export const makeChatsSocket = (config: SocketConfig) => {
 					lastAccountSyncTimestamp = +attrs.timestamp
 					ev.emit('creds.update', { lastAccountSyncTimestamp })
 				}
+
+				// WA Web parity (B7, b12@3626909/3627025): refetch privacy/blocklist named by the dirty node's children
+				await dispatchAccountSyncDirtyProtocols(
+					(getAllBinaryNodeChildren(getBinaryNodeChild(node, 'dirty')!) || []).map(c => c.tag),
+					{ fetchPrivacy: fetchPrivacySettings, fetchBlocklist },
+					(protocol, error) => logger.warn({ protocol, error }, 'dirty-bit refetch failed')
+				)
 
 				break
 			case 'groups':
