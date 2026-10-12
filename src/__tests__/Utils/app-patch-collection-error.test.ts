@@ -1,5 +1,5 @@
-import { jest } from '@jest/globals'
 import { Boom } from '@hapi/boom'
+import { jest } from '@jest/globals'
 import { assertAppPatchAccepted, commitAppPatch } from '../../Utils/chat-utils'
 import type { BinaryNode } from '../../WABinary'
 
@@ -23,7 +23,9 @@ describe('assertAppPatchAccepted (WA Web WAWebSyncdResponseParser b07@1268300)',
 	})
 
 	it('accepts a success with has_more_patches', () => {
-		expect(() => assertAppPatchAccepted(result({ version: '5', has_more_patches: 'true' }), 'regular_low')).not.toThrow()
+		expect(() =>
+			assertAppPatchAccepted(result({ version: '5', has_more_patches: 'true' }), 'regular_low')
+		).not.toThrow()
 	})
 
 	it.each([

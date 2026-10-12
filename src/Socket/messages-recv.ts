@@ -5,8 +5,8 @@ import Long from 'long'
 import { proto } from '../../WAProto/index.js'
 import {
 	DEFAULT_CACHE_TTLS,
-	KEY_BUNDLE_TYPE,
 	INITIAL_PREKEY_COUNT,
+	KEY_BUNDLE_TYPE,
 	PLACEHOLDER_MAX_AGE_SECONDS,
 	PROCESSABLE_HISTORY_TYPES,
 	STATUS_EXPIRY_SECONDS
@@ -27,35 +27,35 @@ import {
 	ACCOUNT_RESTRICTED_TEXT,
 	aesDecryptCTR,
 	aesEncryptGCM,
+	buildHistorySyncOnDemandRequest,
 	cleanMessage,
+	collectServerSyncCollectionNames,
+	createHistorySyncAcker,
 	Curve,
 	decodeMediaRetryNode,
 	decodeMessageNode,
 	decryptMessageNode,
 	delay,
 	derivePairingCodeKey,
+	dispatchAccountSyncDirtyProtocols,
 	encodeBigEndian,
 	encodeSignedDeviceIdentity,
+	extractAccountSyncDeviceSync,
 	extractAddressingContext,
 	extractE2ESessionFromRetryReceipt,
 	getCallStatusFromNode,
 	getNextPreKeys,
 	getStatusFromReceiptType,
-	resolveIncomingReceiptType,
-	collectServerSyncCollectionNames,
-	selectStaleServerSyncCollections,
-	extractAccountSyncDeviceSync,
-	reconcileOwnDevicesOnAccountSync,
-	isStringNullOrEmpty,
 	handleIdentityChange,
 	hkdf,
+	isStringNullOrEmpty,
 	MISSING_KEYS_ERROR_TEXT,
 	NACK_REASONS,
-	dispatchAccountSyncDirtyProtocols,
 	NO_MESSAGE_FOUND_ERROR_TEXT,
-	buildHistorySyncOnDemandRequest,
+	reconcileOwnDevicesOnAccountSync,
+	resolveIncomingReceiptType,
+	selectStaleServerSyncCollections,
 	SERVER_ERROR_CODES,
-	createHistorySyncAcker,
 	toNumber,
 	unixTimestampSeconds,
 	xmppPreKey,
@@ -1089,10 +1089,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				const serverSyncCandidates = collectServerSyncCollectionNames(node)
 				if (serverSyncCandidates.length) {
 					const localSyncStates = await authState.keys.get('app-state-sync-version', serverSyncCandidates)
-					const serverSyncCollections = selectStaleServerSyncCollections(
-						node,
-						name => localSyncStates[name]?.version
-					)
+					const serverSyncCollections = selectStaleServerSyncCollections(node, name => localSyncStates[name]?.version)
 					logger.info(
 						{
 							parity: 'c5',
@@ -1208,6 +1205,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				if (linkCodeCompanionReg?.attrs?.stage !== 'primary_hello') {
 					break
 				}
+
 				const ref = toRequiredBuffer(getBinaryNodeChildBuffer(linkCodeCompanionReg, 'link_code_pairing_ref'))
 				const primaryIdentityPublicKey = toRequiredBuffer(
 					getBinaryNodeChildBuffer(linkCodeCompanionReg, 'primary_identity_pub')
@@ -1676,7 +1674,8 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		processableTypes: PROCESSABLE_HISTORY_TYPES,
 		sendHistSyncReceipt: msg =>
 			sendReceipt(jidNormalizedUser(msg.key.remoteJid!), undefined, [msg.key.id!], 'hist_sync'),
-		sendServerErrorReceipt: (remote, id, mediaKey) => sendNode(buildHistSyncServerErrorReceiptNode({ remote, id, mediaKey }))
+		sendServerErrorReceipt: (remote, id, mediaKey) =>
+			sendNode(buildHistSyncServerErrorReceiptNode({ remote, id, mediaKey }))
 	})
 
 	const handleMessage = async (node: BinaryNode) => {

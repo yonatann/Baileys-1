@@ -9,9 +9,9 @@ import {
 	INITIAL_PREKEY_COUNT,
 	MIN_PREKEY_COUNT,
 	NOISE_WA_HEADER,
+	PASSIVE_TASK_FALLBACK_MS,
 	PROCESSABLE_HISTORY_TYPES,
 	TimeMs,
-	PASSIVE_TASK_FALLBACK_MS,
 	UPLOAD_TIMEOUT
 } from '../Defaults'
 import {
@@ -32,7 +32,6 @@ import {
 	Curve,
 	derivePairingCodeKey,
 	generateLoginNode,
-	nextLoginCounter,
 	generateMdTagPrefix,
 	generateRegistrationNode,
 	getCodeFromWSError,
@@ -41,9 +40,10 @@ import {
 	getNextPreKeysNode,
 	makeEventBuffer,
 	makeNoiseHandler,
+	nextLoginCounter,
+	nextPresenceNameOnCredsUpdate,
 	promiseTimeout,
 	signedKeyPair,
-	nextPresenceNameOnCredsUpdate,
 	xmppSignedPreKey
 } from '../Utils'
 import { decideLoginPreKeyCheck, runKeyDigest, uploadWithServerFlag } from '../Utils/login-traffic-policy'
@@ -661,9 +661,7 @@ export const makeSocket = (config: SocketConfig) => {
 				const flushed = await ws.close(4000)
 				logger.info(
 					{ flushed, reason: error ? 'error' : 'close' },
-					flushed
-						? 'websocket closed cleanly — flushed'
-						: 'websocket close TIMED OUT — not flushed (abrupt drop)'
+					flushed ? 'websocket closed cleanly — flushed' : 'websocket close TIMED OUT — not flushed (abrupt drop)'
 				)
 			} catch (e) {
 				logger.warn({ e }, 'error closing websocket')

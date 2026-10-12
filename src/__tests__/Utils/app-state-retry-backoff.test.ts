@@ -2,10 +2,10 @@ import {
 	APP_STATE_BACKOFF_BASE,
 	APP_STATE_BACKOFF_MAX_MS,
 	APP_STATE_BACKOFF_MIN_MS,
+	appStateRetryBackoffMs,
 	AppStateRetryGate,
 	partitionByRetryGate,
-	trackGatedCollection,
-	appStateRetryBackoffMs
+	trackGatedCollection
 } from '../../Utils/chat-utils'
 
 describe('app-state retry backoff (WA Web WAWebSyncd: min(max(2^n * 1s, serverBackoff), 1h))', () => {

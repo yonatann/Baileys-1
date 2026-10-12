@@ -480,7 +480,10 @@ export const commitAppPatch = async (opts: {
 	name: WAPatchName
 	keys: {
 		transaction: <T>(exec: () => Promise<T>, key: string) => Promise<T>
-		get: (type: 'app-state-sync-version', ids: string[]) => { [id: string]: LTHashState | undefined } | Promise<{ [id: string]: LTHashState | undefined }>
+		get: (
+			type: 'app-state-sync-version',
+			ids: string[]
+		) => { [id: string]: LTHashState | undefined } | Promise<{ [id: string]: LTHashState | undefined }>
 		set: (data: { 'app-state-sync-version': { [name: string]: LTHashState } }) => void | Promise<void>
 	}
 	transactionKey: string
