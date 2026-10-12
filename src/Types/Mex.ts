@@ -31,7 +31,9 @@ export enum QueryIds {
 	DEMOTE = '6551828931592903',
 	DELETE = '30062808666639665',
 	REACHOUT_TIMELOCK = '23983697327930364',
-	MESSAGE_CAPPING_INFO = '24503548349331633'
+	// WAWebMexFetchNewChatMessageCappingInfoJobQuery — rotated from 24503548349331633 (absent from the
+	// 2026-10-12 WA Web capture); current id at wa-web-bundles-202610120949.js b11@642474.
+	MESSAGE_CAPPING_INFO = '27910975521856601'
 }
 export type NewsletterUpdate = {
 	name?: string

@@ -1,4 +1,6 @@
 import { Boom } from '@hapi/boom'
+import { QueryIds, XWAPaths } from '../Types/Mex.js'
+import type { NewChatMessageCapInfo } from '../Types/State.js'
 import type { BinaryNode } from '../WABinary'
 import { getBinaryNodeChild, S_WHATSAPP_NET } from '../WABinary'
 
@@ -56,3 +58,22 @@ export const executeWMexQuery = async <T>(
 		: dataPath?.replace(/_/g, ' ')
 	throw new Boom(`Failed to ${action}, unexpected response structure.`, { statusCode: 400, data: result })
 }
+
+/**
+ * The `input.type` WA Web sends for the new-chat capping query
+ * (wa-web-bundles-202610120949.js b11@643207, WAWebMexFetchNewChatMessageCappingInfoJob).
+ */
+export const NEW_CHAT_MESSAGE_CAPPING_TYPE = 'INDIVIDUAL_NEW_CHAT_THREAD'
+
+/** Fetches the account's new-chat message quota (WAWebMexFetchNewChatMessageCappingInfoJobQuery). */
+export const fetchNewChatMessageCappingInfo = (
+	query: (node: BinaryNode) => Promise<BinaryNode>,
+	generateMessageTag: () => string
+) =>
+	executeWMexQuery<NewChatMessageCapInfo>(
+		{ input: { type: NEW_CHAT_MESSAGE_CAPPING_TYPE } },
+		QueryIds.MESSAGE_CAPPING_INFO,
+		XWAPaths.xwa2_message_capping_info,
+		query,
+		generateMessageTag
+	)

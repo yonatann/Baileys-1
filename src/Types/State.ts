@@ -105,4 +105,6 @@ export type NewChatMessageCapInfo = {
 	ote_status?: NewChatMessageCappingOTEStatusType
 	mv_status?: NewChatMessageCappingMVStatusType
 	capping_status?: NewChatMessageCappingStatusType
+	/** Added to the response in the 2026-10-12 WA Web query (b11@641161 selection set). */
+	subscription_status?: { status?: string; name?: string } | null
 }
