@@ -492,7 +492,9 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				...jidsRequiringFetch.filter(jid => !!isLidUser(jid) || !!isHostedLidUser(jid)),
 				...(
 					(await signalRepository.lidMapping.getLIDsForPNs(
-						jidsRequiringFetch.filter(jid => !!isPnUser(jid) || !!isHostedPnUser(jid))
+						jidsRequiringFetch.filter(jid => !!isPnUser(jid) || !!isHostedPnUser(jid)),
+						// forced refresh must not be blocked by a recent (possibly transient) USync miss
+						{ bypassNegativeCache: !!force }
 					)) || []
 				).map(a => a.lid)
 			]

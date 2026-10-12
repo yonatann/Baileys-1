@@ -44,4 +44,108 @@ describe('LIDMappingStore', () => {
 			expect(result).toBeNull()
 		})
 	})
+	describe('negative cache (WA Web parity: a miss is logged, not re-queried — b06@1508452)', () => {
+		const PN = '5511999990000@s.whatsapp.net'
+		let nowMs = 1_000_000
+		let store: LIDMappingStore
+
+		beforeEach(() => {
+			nowMs = 1_000_000
+			// @ts-ignore
+			mockKeys.get.mockResolvedValue({} as SignalDataTypeMap['lid-mapping'])
+			store = new LIDMappingStore(mockKeys, logger, mockPnToLIDFunc, {
+				negativeTtlMs: 60_000,
+				negativeMaxEntries: 3,
+				now: () => nowMs
+			})
+		})
+
+		it('does not re-issue the USync for a pn that just missed', async () => {
+			mockPnToLIDFunc.mockResolvedValue([])
+			expect(await store.getLIDForPN(PN)).toBeNull()
+			expect(await store.getLIDForPN(PN)).toBeNull()
+			expect(await store.getLIDForPN(PN)).toBeNull()
+			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(1)
+		})
+
+		it('treats an undefined (failed) USync result as a miss too', async () => {
+			mockPnToLIDFunc.mockResolvedValue(undefined)
+			await store.getLIDForPN(PN)
+			await store.getLIDForPN(PN)
+			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(1)
+		})
+
+		it('retries after the negative TTL elapses', async () => {
+			mockPnToLIDFunc.mockResolvedValue([])
+			await store.getLIDForPN(PN)
+			nowMs += 60_001
+			await store.getLIDForPN(PN)
+			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(2)
+		})
+
+		it('does NOT negative-cache a thrown USync error (transient)', async () => {
+			mockPnToLIDFunc.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce([])
+			await expect(store.getLIDForPN(PN)).rejects.toThrow('boom')
+			await store.getLIDForPN(PN)
+			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(2)
+		})
+
+		it('a later learned mapping overrides the negative entry', async () => {
+			mockPnToLIDFunc.mockResolvedValue([])
+			await store.getLIDForPN(PN)
+			await store.storeLIDPNMappings([{ pn: PN, lid: '123456@lid' }])
+			expect(await store.getLIDForPN(PN)).toBe('123456@lid')
+			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(1)
+		})
+
+		it('only queries the pns that are not negatively cached in a batch', async () => {
+			const PN2 = '5511999991111@s.whatsapp.net'
+			mockPnToLIDFunc.mockResolvedValue([])
+			await store.getLIDForPN(PN)
+			mockPnToLIDFunc.mockClear()
+			await store.getLIDsForPNs([PN, PN2])
+			expect(mockPnToLIDFunc).toHaveBeenCalledWith([PN2])
+		})
+
+		it('is bounded (oldest negative evicted past negativeMaxEntries)', async () => {
+			mockPnToLIDFunc.mockResolvedValue([])
+			const pns = [0, 1, 2, 3].map(i => `55119999000${i}@s.whatsapp.net`)
+			for (const pn of pns) await store.getLIDForPN(pn)
+			mockPnToLIDFunc.mockClear()
+			await store.getLIDForPN(pns[0]!) // evicted (max 3) -> queried again
+			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(1)
+			mockPnToLIDFunc.mockClear()
+			await store.getLIDForPN(pns[3]!) // newest still cached
+			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(0)
+		})
+
+		it('bypassNegativeCache re-queries a negatively-cached pn (forced session assert)', async () => {
+			mockPnToLIDFunc.mockResolvedValue([])
+			await store.getLIDForPN(PN)
+			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(1)
+			await store.getLIDsForPNs([PN], { bypassNegativeCache: true })
+			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(2)
+			expect(mockPnToLIDFunc).toHaveBeenLastCalledWith([PN])
+		})
+
+		it('a bypass that succeeds clears the negative entry', async () => {
+			mockPnToLIDFunc.mockResolvedValueOnce([])
+			await store.getLIDForPN(PN)
+			mockPnToLIDFunc.mockResolvedValueOnce([{ pn: PN, lid: '123456@lid' }])
+			expect((await store.getLIDsForPNs([PN], { bypassNegativeCache: true }))?.[0]?.lid).toBe('123456@lid')
+			expect(await store.getLIDForPN(PN)).toBe('123456@lid')
+		})
+
+		it('defaults the negative TTL to 2 minutes', async () => {
+			const def = new LIDMappingStore(mockKeys, logger, mockPnToLIDFunc, { now: () => nowMs })
+			mockPnToLIDFunc.mockResolvedValue([])
+			await def.getLIDForPN(PN)
+			nowMs += 119_000
+			await def.getLIDForPN(PN)
+			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(1)
+			nowMs += 2_000
+			await def.getLIDForPN(PN)
+			expect(mockPnToLIDFunc).toHaveBeenCalledTimes(2)
+		})
+	})
 })
