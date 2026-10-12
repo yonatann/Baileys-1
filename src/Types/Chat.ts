@@ -105,7 +105,8 @@ export type ChatModification =
 	  }
 	| {
 			star: {
-				messages: { id: string; fromMe?: boolean; /** sender JID of an incoming group message (the index needs it) */ participant?: string }[]
+				/** `participant` = sender JID of an incoming non-user-chat message; the index needs it (WAWebSyncdUtils). */
+				messages: Pick<WAMessageKey, 'id' | 'fromMe' | 'participant'>[]
 				star: boolean
 			}
 	  }

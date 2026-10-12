@@ -19,7 +19,18 @@ import {
 	LabelAssociationType,
 	type MessageLabelAssociation
 } from '../Types/LabelAssociation'
-import { type BinaryNode, getBinaryNodeChild, getBinaryNodeChildren, isJidGroup, isLidUser, isPnUser, jidNormalizedUser } from '../WABinary'
+import {
+	type BinaryNode,
+	getBinaryNodeChild,
+	getBinaryNodeChildren,
+	isHostedLidUser,
+	isHostedPnUser,
+	isJidGroup,
+	isJidMetaAI,
+	isLidUser,
+	isPnUser,
+	jidNormalizedUser
+} from '../WABinary'
 import { aesDecrypt, aesEncrypt, hmacSign } from './crypto'
 import { toNumber } from './generics'
 import type { ILogger } from './logger'
@@ -717,13 +728,33 @@ export const decodePatches = async (
 }
 
 /**
- * Participant segment of a per-message app-state index (star, deleteMessageForMe).
- * Mirrors WAWebSyncdUtils: the sender's JID for an incoming message in a non-user
- * (group/broadcast) chat, '0' otherwise. A wrong segment never matches the index
- * on the phone, so the mutation is silently dropped.
+ * WA Web `isUser()` for a chat JID (WAWebWid: server in c.us | lid | bot | hosted | hosted.lid).
+ * Everything else (groups, broadcast, status, newsletter) is a non-user chat.
+ */
+const isWaUserChat = (jid: string) =>
+	isPnUser(jid) || isLidUser(jid) || isJidMetaAI(jid) || isHostedPnUser(jid) || isHostedLidUser(jid)
+
+/**
+ * Participant segment of a per-message app-state index (`star`, `deleteMessageForMe`).
+ *
+ * WA Web evidence (local, gitignored WA Web script cache, module `WAWebSyncdUtils`:
+ *   whatsapp-scheduler-backend/wwebjs_auth/69eb58f24c800520ec386f8c/6a1fff6f37d8b7e53482a484/
+ *     Default/Service Worker/ScriptCache/f1cdccba37924bda_0, ~byte 3863740):
+ *   function s(e){var t="0";return e.participant&&!e.remote.isUser()&&!e.fromMe&&(t=e.participant.toString({legacy:!0})),t}
+ *   function l(e){return[e.remote.toString({legacy:!0}),e.id,e.fromMe?"1":"0",s(e)]}
+ * Index = [action, chatJid, msgId, fromMe ? '1' : '0', participant]. The participant is the sender
+ * ONLY for an incoming message in a non-user chat; otherwise '0'. The same extractor is used by
+ * WA Web's own star lookup (`WAWebSyncdUtils.constructMsgKeySegmentsFromMsgKey`), so it is the
+ * segment the phone matches on.
+ *
+ * Addressing: no PN<->LID conversion. WA Web emits the sender exactly as it is stored on the key
+ * (`toString({legacy:true})`), so we emit the key's own PN or LID JID. Device suffixes are stripped
+ * (WA Web's Wid has no device), so `5511...:12@s.whatsapp.net` -> `5511...@s.whatsapp.net`.
+ *
+ * A wrong segment never matches the index on the phone, so the mutation is silently dropped.
  */
 const messageIndexParticipant = (chatJid: string, key: { fromMe?: boolean | null; participant?: string | null }) =>
-	key.participant && !key.fromMe && !isPnUser(chatJid) && !isLidUser(chatJid) ? key.participant : '0'
+	key.participant && !key.fromMe && !isWaUserChat(chatJid) ? jidNormalizedUser(key.participant) : '0'
 
 export const chatModificationToAppPatch = (mod: ChatModification, jid: string) => {
 	const OP = proto.SyncdMutation.SyncdOperation
@@ -868,7 +899,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 					starred: !!mod.star.star
 				}
 			},
-			index: ['star', jid, key.id, key.fromMe ? '1' : '0', messageIndexParticipant(jid, key)],
+			index: ['star', jid, key.id!, key.fromMe ? '1' : '0', messageIndexParticipant(jid, key)],
 			type: 'regular_low',
 			apiVersion: 2,
 			operation: OP.SET
@@ -1094,11 +1125,10 @@ export const processSyncAction = (
 		if (accountSettings) {
 			accountSettings.unarchiveChats = unarchiveChats
 		}
-	} else if (action?.starAction || type === 'star') {
-		let starred = action?.starAction?.starred
-		if (typeof starred !== 'boolean') {
-			starred = syncAction.index[syncAction.index.length - 1] === '1'
-		}
+	} else if (action?.starAction) {
+		// The star state lives only in starAction.starred. The index's last segment is the
+		// sender participant (or '0'), not a starred flag, so there is no index fallback.
+		const starred = !!action.starAction.starred
 
 		ev.emit('messages.update', [
 			{
