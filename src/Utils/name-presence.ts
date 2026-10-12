@@ -21,7 +21,7 @@ export const FORK_PRESENCE_ONLY_ON_NAME_CHANGE = true
  */
 export const nextPresenceNameOnCredsUpdate = (
 	currentName: string | undefined,
-	update: Partial<Pick<AuthenticationCreds, 'me'>>
+	update: Partial<AuthenticationCreds>
 ): string | null => {
 	const name = update.me?.name
 	if (!name || name === currentName) {
