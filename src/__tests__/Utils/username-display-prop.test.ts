@@ -1,9 +1,11 @@
 import { describe, expect, it } from '@jest/globals'
 import {
 	applyUsernameContactDisplayProp,
+	resolveIsGuest,
 	USERNAME_CONTACT_DISPLAY_CONFIG_CODE,
 	USERNAME_CONTACT_DISPLAY_CONFIG_NAME,
-	USERNAME_CONTACT_DISPLAY_DEFAULT
+	USERNAME_CONTACT_DISPLAY_DEFAULT,
+	usernameDisplayedEnabled
 } from '../../Utils/username-display-prop'
 import { type BinaryNode, reduceBinaryNodeToDictionary } from '../../WABinary'
 
@@ -62,5 +64,42 @@ describe('username_contact_display AB prop (4746)', () => {
 			content: [{ tag: 'prop', attrs: { config_code: '4746', config_value: 'True' } }]
 		}
 		expect(applyUsernameContactDisplayProp(reduceBinaryNodeToDictionary(onNode, 'prop'), false)).toBe(true)
+	})
+})
+
+// WA Web parity (FR2 isGuest disjunct): usernameDisplayedEnabled() = username_contact_display prop || Environment.isGuest.
+// Evidence: WAWebUsernameGatingUtils (b06.js ~@3755282/~@3755434) `function e(){return getABPropConfigValue("username_contact_display")||r("WAWebEnvironment").isGuest}`.
+// isGuest is gkx("10314") (b01 WAWebEnvironment); its companion-client value is unverifiable from the bundle (U-2) and defaults to false.
+describe('usernameDisplayedEnabled (prop term || isGuest disjunct)', () => {
+	it('truth table: result is prop || isGuest', () => {
+		expect(usernameDisplayedEnabled({ usernameContactDisplayProp: false, isGuest: false })).toBe(false)
+		expect(usernameDisplayedEnabled({ usernameContactDisplayProp: true, isGuest: false })).toBe(true)
+		expect(usernameDisplayedEnabled({ usernameContactDisplayProp: false, isGuest: true })).toBe(true)
+		expect(usernameDisplayedEnabled({ usernameContactDisplayProp: true, isGuest: true })).toBe(true)
+	})
+
+	it('is true for isGuest alone even when the prop is off (the disjunct is not gated by the prop)', () => {
+		expect(usernameDisplayedEnabled({ usernameContactDisplayProp: false, isGuest: true })).toBe(true)
+	})
+
+	it('default companion input: isGuest is false, so the result equals the prop value', () => {
+		expect(usernameDisplayedEnabled({ usernameContactDisplayProp: false, isGuest: resolveIsGuest(undefined) })).toBe(
+			false
+		)
+		expect(usernameDisplayedEnabled({ usernameContactDisplayProp: true, isGuest: resolveIsGuest(undefined) })).toBe(
+			true
+		)
+	})
+})
+
+describe('resolveIsGuest (SocketConfig gatekeepers input, default false)', () => {
+	it('is false when no gatekeepers are configured', () => {
+		expect(resolveIsGuest(undefined)).toBe(false)
+		expect(resolveIsGuest({})).toBe(false)
+	})
+
+	it('is true only for the explicit boolean true', () => {
+		expect(resolveIsGuest({ isGuest: true })).toBe(true)
+		expect(resolveIsGuest({ isGuest: false })).toBe(false)
 	})
 })
