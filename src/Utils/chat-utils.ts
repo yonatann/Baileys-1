@@ -19,7 +19,7 @@ import {
 	LabelAssociationType,
 	type MessageLabelAssociation
 } from '../Types/LabelAssociation'
-import { type BinaryNode, getBinaryNodeChild, getBinaryNodeChildren, isJidGroup, jidNormalizedUser } from '../WABinary'
+import { type BinaryNode, getBinaryNodeChild, getBinaryNodeChildren, isJidGroup, isLidUser, isPnUser, jidNormalizedUser } from '../WABinary'
 import { aesDecrypt, aesEncrypt, hmacSign } from './crypto'
 import { toNumber } from './generics'
 import type { ILogger } from './logger'
@@ -716,6 +716,15 @@ export const decodePatches = async (
 	return { state: newState, mutationMap }
 }
 
+/**
+ * Participant segment of a per-message app-state index (star, deleteMessageForMe).
+ * Mirrors WAWebSyncdUtils: the sender's JID for an incoming message in a non-user
+ * (group/broadcast) chat, '0' otherwise. A wrong segment never matches the index
+ * on the phone, so the mutation is silently dropped.
+ */
+const messageIndexParticipant = (chatJid: string, key: { fromMe?: boolean | null; participant?: string | null }) =>
+	key.participant && !key.fromMe && !isPnUser(chatJid) && !isLidUser(chatJid) ? key.participant : '0'
+
 export const chatModificationToAppPatch = (mod: ChatModification, jid: string) => {
 	const OP = proto.SyncdMutation.SyncdOperation
 	const getMessageRange = (lastMessages: LastMessageList) => {
@@ -802,7 +811,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 					messageTimestamp: timestamp
 				}
 			},
-			index: ['deleteMessageForMe', jid, key.id!, key.fromMe ? '1' : '0', '0'],
+			index: ['deleteMessageForMe', jid, key.id!, key.fromMe ? '1' : '0', messageIndexParticipant(jid, key)],
 			type: 'regular_high',
 			apiVersion: 3,
 			operation: OP.SET
@@ -859,7 +868,7 @@ export const chatModificationToAppPatch = (mod: ChatModification, jid: string) =
 					starred: !!mod.star.star
 				}
 			},
-			index: ['star', jid, key.id, key.fromMe ? '1' : '0', '0'],
+			index: ['star', jid, key.id, key.fromMe ? '1' : '0', messageIndexParticipant(jid, key)],
 			type: 'regular_low',
 			apiVersion: 2,
 			operation: OP.SET
