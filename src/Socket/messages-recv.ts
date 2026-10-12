@@ -138,6 +138,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		messageRetryManager,
 		registerSocketEndHandler,
 		issuePrivacyTokens,
+		fetchPrivacySettings,
 		fetchAccountReachoutTimelock,
 		placeholderResendCache
 	} = sock
@@ -1153,6 +1154,14 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 							}
 						}
 					})
+				} else if (child!.tag === 'privacy') {
+					// WA Web parity (B7): privacy changes arrive as account_sync pushes (forceUpdatePrivacySettings)
+					// instead of a refetch on every open
+					try {
+						await fetchPrivacySettings(true)
+					} catch (error) {
+						logger.warn({ error }, 'failed to refresh privacy settings after account_sync')
+					}
 				} else if (child!.tag === 'blocklist') {
 					const blocklists = getBinaryNodeChildren(child, 'item')
 

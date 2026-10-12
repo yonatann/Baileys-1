@@ -73,6 +73,20 @@ export type AuthenticationCreds = SignalCreds & {
 	registered: boolean
 	pairingCode: string | undefined
 	lastPropHash: string | undefined
+	/** WA Web parity (B7): ms epoch of the last successful AB-props sync (with `lastPropHash`). */
+	abPropsSyncedAt?: number
+	/** WA Web parity (B7): server-provided AB-props refresh period in seconds (raw attr; clamped on use). */
+	abPropsRefreshSec?: number
+	/** WA Web parity (B7): last-known server AB props the fork consumes, restored when the open-time fetch is skipped. */
+	abPropsServerProps?: {
+		privacyTokenOn1to1?: boolean
+		profilePicPrivacyToken?: boolean
+		lidTrustedTokenIssueToLid?: boolean
+	}
+	/** WA Web parity (B7): ms epoch of the pairing-bootstrap blocklist fetch (later changes arrive as pushes). */
+	blocklistSyncedAt?: number
+	/** WA Web parity (B7): ms epoch of the pairing-bootstrap privacy fetch (later changes arrive as pushes). */
+	privacySyncedAt?: number
 	routingInfo: Buffer | undefined
 	additionalData?: any | undefined
 }

@@ -45,6 +45,7 @@ import {
 	newLTHashState,
 	processSyncAction
 } from '../Utils'
+import { clampAbPropsRefreshSec, planInitQueries } from '../Utils/init-queries'
 import { makeMutex } from '../Utils/make-mutex'
 import processMessage from '../Utils/process-message'
 import { buildTcTokenFromJid } from '../Utils/tc-token-utils'
@@ -101,6 +102,9 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		/** AB prop 14303: issue tctokens to LID instead of PN. WA Web default: false. */
 		lidTrustedTokenIssueToLid: false
 	}
+	// WA Web parity (B7): restore the last-known server props so skipping the open-time AB-props IQ (or a
+	// delta response that omits unchanged props) does not silently fall back to the defaults above.
+	Object.assign(serverProps, authState?.creds?.abPropsServerProps ?? {})
 
 	let syncState: SyncState = SyncState.Connecting
 
@@ -155,6 +159,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				content: [{ tag: 'privacy', attrs: {} }]
 			})
 			privacySettings = reduceBinaryNodeToDictionary(content?.[0] as BinaryNode, 'category')
+			ev.emit('creds.update', { privacySyncedAt: Date.now() })
 		}
 
 		return privacySettings
@@ -393,6 +398,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 			}
 		})
 
+		ev.emit('creds.update', { blocklistSyncedAt: Date.now() })
 		const listNode = getBinaryNodeChild(result, 'list')
 		return getBinaryNodeChildren(listNode, 'item').map(n => n.attrs.jid)
 	}
@@ -1001,8 +1007,12 @@ export const makeChatsSocket = (config: SocketConfig) => {
 			if (propsNode.attrs?.hash) {
 				// on some clients, the hash is returning as undefined
 				authState.creds.lastPropHash = propsNode?.attrs?.hash
-				ev.emit('creds.update', authState.creds)
 			}
+
+			// WA Web parity (B7): persist the refresh period + sync time so reconnects within the window skip this IQ
+			authState.creds.abPropsRefreshSec = clampAbPropsRefreshSec(propsNode.attrs?.refresh)
+			authState.creds.abPropsSyncedAt = Date.now()
+			ev.emit('creds.update', authState.creds)
 
 			props = reduceBinaryNodeToDictionary(propsNode, 'prop')
 		}
@@ -1021,6 +1031,11 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		const lidIssueProp = props['14303'] ?? props['lid_trusted_token_issue_to_lid']
 		if (lidIssueProp !== undefined) {
 			serverProps.lidTrustedTokenIssueToLid = lidIssueProp === 'true' || lidIssueProp === '1'
+		}
+
+		if (propsNode) {
+			authState.creds.abPropsServerProps = { ...serverProps }
+			ev.emit('creds.update', { abPropsServerProps: authState.creds.abPropsServerProps })
 		}
 
 		logger.debug({ serverProps }, 'fetched props')
@@ -1190,7 +1205,15 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	 * help ensure parity with WA Web
 	 * */
 	const executeInitQueries = async () => {
-		await Promise.all([fetchProps(), fetchBlocklist(), fetchPrivacySettings()])
+		// WA Web parity (B7): not every open. AB props follow the server refresh period (hash persisted);
+		// blocklist + privacy are fetched once per pairing and then updated by account_sync/dirty pushes.
+		const plan = planInitQueries(authState.creds, Date.now())
+		logger.debug({ plan }, 'init queries plan')
+		await Promise.all([
+			plan.props ? fetchProps() : undefined,
+			plan.blocklist ? fetchBlocklist() : undefined,
+			plan.privacy ? fetchPrivacySettings(true) : undefined
+		])
 	}
 
 	const upsertMessage = ev.createBufferedFunction(async (msg: WAMessage, type: MessageUpsertType) => {
