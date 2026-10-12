@@ -970,14 +970,15 @@ export const processSyncAction = (
 		ev.emit('settings.update', { setting: 'locale', value: action.localeSetting.locale })
 	} else if (action?.nctSaltSyncAction || type === 'nct_salt_sync') {
 		// WAWebNctSaltSync (b12@1500354): stores the account NCT salt used to derive cstoken.
-		const result = applyNctSaltSyncAction(
-			syncAction.operation ?? proto.SyncdMutation.SyncdOperation.SET,
-			action?.nctSaltSyncAction
-		)
+		// `me` is carried unchanged: the pushName handler in socket.ts sends <presence/> on any
+		// creds.update whose me.name differs, so a salt update must not look like a rename.
+		const result = applyNctSaltSyncAction(syncAction.operation, action?.nctSaltSyncAction)
 		if (result.kind === 'set') {
-			ev.emit('creds.update', { nctSalt: result.salt })
+			ev.emit('creds.update', { nctSalt: result.salt, me })
 		} else if (result.kind === 'remove') {
-			ev.emit('creds.update', { nctSalt: undefined })
+			ev.emit('creds.update', { nctSalt: undefined, me })
+		} else if (result.kind === 'unsupported') {
+			logger?.warn('[nct-salt-sync] Unsupported operation')
 		} else {
 			logger?.warn('[nct-salt-sync] Missing salt in nctSaltSyncAction')
 		}

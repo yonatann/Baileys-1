@@ -34,6 +34,7 @@ import { aesDecryptGCM, hmacSign } from './crypto'
 import { getKeyAuthor, toNumber } from './generics'
 import { downloadAndProcessHistorySyncNotification } from './history'
 import type { ILogger } from './logger'
+import { nctSaltFromHistorySync } from './nct-token-utils'
 import { buildMergedTcTokenIndexWrite, resolveTcTokenJid } from './tc-token-utils'
 
 type ProcessMessageContext = {
@@ -405,13 +406,11 @@ const processMessage = async (
 							.catch(err => logger?.warn({ err }, 'failed to store LID-PN mappings from history sync'))
 					}
 
-					// WA stores the NCT salt only on the initial-bootstrap path (handleInitialSyncMsgs, b07@3212946)
-					if (
-						data.syncType === proto.HistorySync.HistorySyncType.INITIAL_BOOTSTRAP &&
-						data.nctSalt !== null &&
-						data.nctSalt !== undefined
-					) {
-						ev.emit('creds.update', { nctSalt: Buffer.from(data.nctSalt) })
+					// WA stores the NCT salt only on the initial-bootstrap path (handleInitialSyncMsgs, b07@3212946).
+					// `me` is carried unchanged so the pushName handler sees no name change (see chat-utils).
+					const nctSalt = nctSaltFromHistorySync(data.syncType, data.nctSalt)
+					if (nctSalt !== undefined) {
+						ev.emit('creds.update', { nctSalt, me: creds.me })
 					}
 
 					await storeTcTokensFromHistorySync(data.chats, signalRepository, keyStore, logger)

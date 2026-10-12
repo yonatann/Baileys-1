@@ -1,8 +1,14 @@
 import { jest } from '@jest/globals'
 import { proto } from '../../../WAProto/index.js'
-import type { BaileysEventEmitter, ChatMutation } from '../../Types'
+import type { BaileysEventEmitter, ChatMutation, Contact } from '../../Types'
 import { processSyncAction } from '../../Utils/chat-utils'
-import { applyNctSaltSyncAction, genCsTokenNode, isNctTokenSendEnabled } from '../../Utils/nct-token-utils'
+import {
+	applyNctSaltSyncAction,
+	genCsTokenNode,
+	isNctTokenSendEnabled,
+	nctSaltFromHistorySync,
+	resolveAccountLid
+} from '../../Utils/nct-token-utils'
 
 const SALT = Buffer.from(Array.from({ length: 32 }, (_, i) => i))
 const LID = '123456789@lid'
@@ -24,7 +30,7 @@ describe('isNctTokenSendEnabled (AB prop 24941 / wa_nct_token_send_enabled)', ()
 })
 
 describe('genCsTokenNode (WAWebSendMsgCreateFanoutStanza genCsTokenBody, b07@694300-696300)', () => {
-	const base = { enabled: true, salt: SALT, chatJid: LID, recipientLid: LID }
+	const base = { enabled: true, salt: SALT, chatJid: LID, accountLid: LID }
 
 	it('builds <cstoken> whose content is HMAC-SHA256(salt, accountLid string)', () => {
 		const node = genCsTokenNode(base)
@@ -59,13 +65,31 @@ describe('genCsTokenNode (WAWebSendMsgCreateFanoutStanza genCsTokenBody, b07@694
 		expect(genCsTokenNode({ ...base, chatJid: '13135550001@s.whatsapp.net' })).toBeUndefined()
 	})
 
-	it('is absent when the account LID is unknown or not a LID', () => {
-		expect(genCsTokenNode({ ...base, recipientLid: undefined })).toBeUndefined()
-		expect(genCsTokenNode({ ...base, recipientLid: '972500000000@s.whatsapp.net' })).toBeUndefined()
+	it('is absent when the account LID is unknown (WA: accountLid == null, b07 genCsTokenBody r==null)', () => {
+		expect(genCsTokenNode({ ...base, accountLid: undefined })).toBeUndefined()
+	})
+
+	it('does not re-gate the account LID on its format (WA checks only null; the caller resolves it)', () => {
+		const node = genCsTokenNode({ ...base, accountLid: '972500000000@s.whatsapp.net' })
+		expect(node).toBeDefined()
 	})
 })
 
-describe('applyNctSaltSyncAction (WAWebNctSaltSync applyMutations, b12@1500354)', () => {
+describe('resolveAccountLid (stand-in for WA chat.accountLid, which the fork lacks)', () => {
+	it('passes a LID destination through without a mapping lookup', async () => {
+		const lookup = jest.fn(async () => '999@lid')
+		await expect(resolveAccountLid(LID, lookup)).resolves.toBe(LID)
+		expect(lookup).not.toHaveBeenCalled()
+	})
+	it('maps a PN destination through the LID mapping store', async () => {
+		await expect(resolveAccountLid('972500000000@s.whatsapp.net', async () => LID)).resolves.toBe(LID)
+	})
+	it('returns undefined for an unmapped PN, never the PN itself (WA null)', async () => {
+		await expect(resolveAccountLid('972500000000@s.whatsapp.net', async () => null)).resolves.toBeUndefined()
+	})
+})
+
+describe('applyNctSaltSyncAction (WAWebNctSaltSync $NctSaltSync$p_1, b12@1500868-1501984)', () => {
 	it('SET stores the salt bytes', () => {
 		expect(applyNctSaltSyncAction(SET, { salt: SALT })).toEqual({ kind: 'set', salt: SALT })
 	})
@@ -75,6 +99,25 @@ describe('applyNctSaltSyncAction (WAWebNctSaltSync applyMutations, b12@1500354)'
 	it('SET without a salt is malformed', () => {
 		expect(applyNctSaltSyncAction(SET, {})).toEqual({ kind: 'malformed' })
 	})
+	it('a non-SET, non-REMOVE operation is unsupported (WA SyncActionState.Unsupported)', () => {
+		expect(applyNctSaltSyncAction(undefined, { salt: SALT })).toEqual({ kind: 'unsupported' })
+	})
+})
+
+describe('nctSaltFromHistorySync (WA stores nctSalt only on INITIAL_BOOTSTRAP, b07@3212946)', () => {
+	const INITIAL_BOOTSTRAP = proto.HistorySync.HistorySyncType.INITIAL_BOOTSTRAP
+	const RECENT = proto.HistorySync.HistorySyncType.RECENT
+
+	it('stores the salt from an INITIAL_BOOTSTRAP history sync', () => {
+		expect(nctSaltFromHistorySync(INITIAL_BOOTSTRAP, SALT)).toEqual(SALT)
+	})
+	it('ignores a salt on any other history sync type', () => {
+		expect(nctSaltFromHistorySync(RECENT, SALT)).toBeUndefined()
+	})
+	it('ignores a missing salt on INITIAL_BOOTSTRAP', () => {
+		expect(nctSaltFromHistorySync(INITIAL_BOOTSTRAP, null)).toBeUndefined()
+		expect(nctSaltFromHistorySync(INITIAL_BOOTSTRAP, undefined)).toBeUndefined()
+	})
 })
 
 describe('nct_salt_sync syncd mutation (processSyncAction)', () => {
@@ -82,22 +125,35 @@ describe('nct_salt_sync syncd mutation (processSyncAction)', () => {
 		const emit = jest.fn(() => true)
 		return { ev: { emit } as unknown as BaileysEventEmitter, emit }
 	}
-	const mutation = (operation: proto.SyncdMutation.SyncdOperation, value?: proto.ISyncActionValue): ChatMutation =>
+	const me = { id: '1234567890:1@s.whatsapp.net', name: 'Test User' } as Contact
+	const mutation = (operation: proto.SyncdMutation.SyncdOperation | undefined, value?: proto.ISyncActionValue) =>
 		({
 			syncAction: { value: value ?? null },
 			index: ['nct_salt_sync'],
 			operation
 		}) as unknown as ChatMutation
 
-	it('SET emits creds.update with the salt', () => {
+	it('SET emits creds.update with the salt, carrying me unchanged so the pushName handler is a no-op', () => {
 		const { ev, emit } = makeEv()
-		processSyncAction(mutation(SET, { nctSaltSyncAction: { salt: SALT } }), ev, { id: 'me' } as never)
-		expect(emit).toHaveBeenCalledWith('creds.update', { nctSalt: SALT })
+		processSyncAction(mutation(SET, { nctSaltSyncAction: { salt: SALT } }), ev, me)
+		expect(emit).toHaveBeenCalledWith('creds.update', { nctSalt: SALT, me })
 	})
 
-	it('REMOVE emits creds.update clearing the salt', () => {
+	it('REMOVE emits creds.update clearing the salt, carrying me unchanged', () => {
 		const { ev, emit } = makeEv()
-		processSyncAction(mutation(REMOVE), ev, { id: 'me' } as never)
-		expect(emit).toHaveBeenCalledWith('creds.update', { nctSalt: undefined })
+		processSyncAction(mutation(REMOVE), ev, me)
+		expect(emit).toHaveBeenCalledWith('creds.update', { nctSalt: undefined, me })
+	})
+
+	it('a mutation with no operation is unsupported and emits nothing (no SET default)', () => {
+		const { ev, emit } = makeEv()
+		processSyncAction(mutation(undefined, { nctSaltSyncAction: { salt: SALT } }), ev, me)
+		expect(emit).not.toHaveBeenCalledWith('creds.update', expect.anything())
+	})
+
+	it('SET with a null salt is malformed and emits nothing', () => {
+		const { ev, emit } = makeEv()
+		processSyncAction(mutation(SET, { nctSaltSyncAction: {} }), ev, me)
+		expect(emit).not.toHaveBeenCalledWith('creds.update', expect.anything())
 	})
 })

@@ -37,7 +37,7 @@ import {
 	DEFAULT_LID_REFETCH_THROTTLE_SEC,
 	unixTimestampSeconds
 } from '../Utils'
-import { genCsTokenNode } from '../Utils/nct-token-utils'
+import { genCsTokenNode, resolveAccountLid } from '../Utils/nct-token-utils'
 import { getUrlInfo } from '../Utils/link-preview'
 import { makeKeyedMutex, makeMutex } from '../Utils/make-mutex'
 import { getMessageReportingToken, shouldIncludeReportingToken } from '../Utils/reporting-utils'
@@ -1136,12 +1136,16 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				})
 			} else if (is1on1Send && !tcTokenBuffer?.length) {
 				// WA: `Ie = tctoken ?? cstoken` (WAWebSendMsgCreateFanoutStanza b07@692946). cstoken is
-				// only attached when no valid tctoken exists; gated by AB 24941 (default off).
+				// only attached when no valid tctoken exists; gated by AB 24941 (default off). Retries
+				// are excluded with the tctoken above (see PR body: WA attaches both on resends).
+				const accountLid = sock.serverProps.nctTokenSendEnabled
+					? await resolveAccountLid(destinationJid, getLIDForPN)
+					: undefined
 				const csTokenNode = genCsTokenNode({
 					enabled: sock.serverProps.nctTokenSendEnabled,
 					salt: authState.creds.nctSalt,
 					chatJid: destinationJid,
-					recipientLid: tcTokenJid
+					accountLid
 				})
 				if (csTokenNode) {
 					;(stanza.content as BinaryNode[]).push(csTokenNode)
