@@ -15,7 +15,6 @@ import {
 } from '../Defaults'
 import {
 	type LIDMapping,
-	type NewChatMessageCapInfo,
 	QueryIds,
 	ReachoutTimelockEnforcementType,
 	type ReachoutTimelockState,
@@ -61,7 +60,7 @@ import {
 import { BinaryInfo } from '../WAM/BinaryInfo.js'
 import { USyncQuery, USyncUser } from '../WAUSync/'
 import { WebSocketClient } from './Client'
-import { executeWMexQuery } from './mex.js'
+import { executeWMexQuery, fetchNewChatMessageCappingInfo } from './mex.js'
 
 /**
  * Connects to WA servers and performs:
@@ -1156,13 +1155,7 @@ export const makeSocket = (config: SocketConfig) => {
 	 * @returns Returns the quota and the usage.
 	 */
 	const fetchNewChatMessageCap = async () => {
-		return executeWMexQuery<NewChatMessageCapInfo>(
-			{ input: { type: 'INDIVIDUAL_NEW_CHAT_MSG' } },
-			QueryIds.MESSAGE_CAPPING_INFO,
-			XWAPaths.xwa2_message_capping_info,
-			query,
-			generateMessageTag
-		)
+		return fetchNewChatMessageCappingInfo(query, generateMessageTag)
 	}
 
 	return {
