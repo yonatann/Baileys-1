@@ -1,6 +1,7 @@
 import { LRUCache } from 'lru-cache'
 import type { LIDMapping, SignalKeyStoreWithTransaction } from '../Types'
 import type { ILogger } from '../Utils/logger'
+import { classifyLidPnConflict } from './lid-conflict'
 import { isHostedPnUser, isLidUser, isPnUser, jidDecode, jidNormalizedUser, WAJIDDomains } from '../WABinary'
 
 export interface LIDMappingStoreOptions {
@@ -55,8 +56,8 @@ export class LIDMappingStore {
 	async storeLIDPNMappings(pairs: LIDMapping[]): Promise<void> {
 		if (pairs.length === 0) return
 
-		const validatedPairs: Array<{ pnUser: string; lidUser: string }> = []
-		for (const { lid, pn } of pairs) {
+		const validatedPairs: Array<{ pnUser: string; lidUser: string; learningSource?: string }> = []
+		for (const { lid, pn, learningSource } of pairs) {
 			if (!((isLidUser(lid) && isPnUser(pn)) || (isPnUser(lid) && isLidUser(pn)))) {
 				this.logger.warn(`Invalid LID-PN mapping: ${lid}, ${pn}`)
 				continue
@@ -66,7 +67,7 @@ export class LIDMappingStore {
 			const pnDecoded = jidDecode(pn)
 			if (!lidDecoded || !pnDecoded) continue
 
-			validatedPairs.push({ pnUser: pnDecoded.user, lidUser: lidDecoded.user })
+			validatedPairs.push({ pnUser: pnDecoded.user, lidUser: lidDecoded.user, learningSource })
 		}
 
 		if (validatedPairs.length === 0) return
@@ -98,6 +99,8 @@ export class LIDMappingStore {
 			}
 		}
 
+		await this.logLidPnConflicts(validatedPairs)
+
 		const pairMap: { [_: string]: string } = {}
 		for (const { pnUser, lidUser } of validatedPairs) {
 			const existingLidUser = existingMappings.get(pnUser)
@@ -128,6 +131,45 @@ export class LIDMappingStore {
 			this.negativeCache.delete(pnUser)
 			this.mappingCache.set(`pn:${pnUser}`, lidUser)
 			this.mappingCache.set(`lid:${lidUser}`, pnUser)
+		}
+	}
+
+	/**
+	 * WA Web parity (PR3, LOG ONLY): classify conflicts the way createLidPnMappings R() does and log them.
+	 * Never changes what is written, and a failing read is swallowed so the store write is unaffected.
+	 */
+	private async logLidPnConflicts(
+		pairs: Array<{ pnUser: string; lidUser: string; learningSource?: string }>
+	): Promise<void> {
+		try {
+			const lookupKeys = new Set<string>()
+			for (const { pnUser, lidUser } of pairs) {
+				if (this.mappingCache.get(`lid:${lidUser}`) === undefined) lookupKeys.add(`${lidUser}_reverse`)
+				if (this.mappingCache.get(`lid:${pnUser}`) === undefined) lookupKeys.add(`${pnUser}_reverse`)
+			}
+
+			const stored: { [_: string]: string } = lookupKeys.size
+				? await this.keys.get('lid-mapping', [...lookupKeys])
+				: {}
+
+			for (const { pnUser, lidUser, learningSource } of pairs) {
+				const cachedPnUserForLid =
+					(this.mappingCache.get(`lid:${lidUser}`) as string | undefined) ?? (stored[`${lidUser}_reverse`] as string | undefined)
+				const pnUserIsCachedLid =
+					this.mappingCache.get(`lid:${pnUser}`) !== undefined || stored[`${pnUser}_reverse`] !== undefined
+				const conflict = classifyLidPnConflict({
+					learningSource,
+					lidUser,
+					pnUser,
+					cachedPnUserForLid: typeof cachedPnUserForLid === 'string' ? cachedPnUserForLid : undefined,
+					pnUserIsCachedLid
+				})
+				if (conflict) {
+					this.logger.warn({ kind: conflict.kind, learningSource: learningSource ?? 'untagged' }, conflict.logKey)
+				}
+			}
+		} catch (err) {
+			this.logger.debug({ err }, 'LID-PN conflict classification skipped (log-only)')
 		}
 	}
 
@@ -259,7 +301,7 @@ export class LIDMappingStore {
 			}
 
 			if (result && result.length > 0) {
-				await this.storeLIDPNMappings(result)
+				await this.storeLIDPNMappings(result.map(pair => ({ ...pair, learningSource: 'usync' })))
 				for (const pair of result) {
 					const pnDecoded = jidDecode(pair.pn)
 					const pnUser = pnDecoded?.user

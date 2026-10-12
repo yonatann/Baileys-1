@@ -338,7 +338,9 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			const lidResults = result.list.filter(a => !!a.lid)
 			if (lidResults.length > 0) {
 				logger.trace('Storing LID maps from device call')
-				await signalRepository.lidMapping.storeLIDPNMappings(lidResults.map(a => ({ lid: a.lid as string, pn: a.id })))
+				await signalRepository.lidMapping.storeLIDPNMappings(
+					lidResults.map(a => ({ lid: a.lid as string, pn: a.id, learningSource: 'usync' }))
+				)
 
 				// Force-refresh sessions for newly mapped LIDs to align identity addressing.
 				// WA Web parity (D3 / BE#660): throttle per-LID so repeated LID-mapping churn

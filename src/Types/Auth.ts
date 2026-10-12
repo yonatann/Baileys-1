@@ -22,6 +22,8 @@ export type SignalIdentity = {
 export type LIDMapping = {
 	pn: string
 	lid: string
+	/** WA Web learningSource tag (log-only use in PR3). Absent when the call site has no verified WA source. */
+	learningSource?: string
 }
 
 export type LTHashState = {
