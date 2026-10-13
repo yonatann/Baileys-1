@@ -785,7 +785,7 @@ export const makeSocket = (config: SocketConfig) => {
 			name: '~'
 		}
 		ev.emit('creds.update', authState.creds)
-		await sendNode({
+		const response = await query({
 			tag: 'iq',
 			attrs: {
 				to: S_WHATSAPP_NET,
@@ -833,8 +833,16 @@ export const makeSocket = (config: SocketConfig) => {
 					]
 				}
 			]
-		})
-		return authState.creds.pairingCode
+		}, 30_000)
+		// A locally generated code is not usable until WhatsApp accepts companion_hello.
+		// waitForMessage may return undefined on timeout, so require an explicit IQ result.
+		if (response?.tag !== 'iq' || response.attrs?.type !== 'result') {
+			throw new Boom('Pairing code registration was not acknowledged', {
+				statusCode: DisconnectReason.timedOut
+			})
+		}
+
+		return pairingCode
 	}
 
 	async function generatePairingKey() {
