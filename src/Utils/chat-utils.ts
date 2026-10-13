@@ -1122,6 +1122,8 @@ export const processSyncAction = (
 			{
 				id,
 				unreadCount: isNullUpdate ? null : !!markReadAction?.read ? 0 : -1,
+				// Blueticks: the range the read covers (a replayed read settles unread by it).
+				messageRange: markReadAction?.messageRange || undefined,
 				conditional: getChatUpdateConditional(id!, markReadAction?.messageRange)
 			}
 		])

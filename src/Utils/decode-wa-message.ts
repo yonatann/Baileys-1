@@ -261,6 +261,22 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 	}
 }
 
+// our other device's send: its messageContextInfo (messageSecret) rides beside the envelope
+const unwrapDeviceSentMessage = (msg: proto.IMessage): proto.IMessage => {
+	const sent = msg.deviceSentMessage?.message
+	if (!sent) {
+		return msg
+	}
+
+	if (msg.messageContextInfo && !sent.messageContextInfo) {
+		sent.messageContextInfo = msg.messageContextInfo
+	} else if (msg.messageContextInfo?.messageSecret && !sent.messageContextInfo?.messageSecret) {
+		sent.messageContextInfo!.messageSecret = msg.messageContextInfo.messageSecret
+	}
+
+	return sent
+}
+
 export const decryptMessageNode = (
 	stanza: BinaryNode,
 	meId: string,
@@ -339,7 +355,8 @@ export const decryptMessageNode = (
 						let msg: proto.IMessage = proto.Message.decode(
 							e2eType !== 'plaintext' ? unpadRandomMax16(msgBuffer) : msgBuffer
 						)
-						msg = msg.deviceSentMessage?.message || msg
+						msg = unwrapDeviceSentMessage(msg)
+
 						if (msg.senderKeyDistributionMessage) {
 							//eslint-disable-next-line max-depth
 							try {

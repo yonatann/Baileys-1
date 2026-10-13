@@ -76,6 +76,8 @@ export type ChatUpdate = Partial<
 		conditional: (bufferedData: BufferedEventData) => boolean | undefined
 		/** last update time */
 		timestamp?: number
+		/** the message range a mark-as-read app-state action covers (a replayed read settles unread by it) */
+		messageRange?: proto.SyncActionValue.ISyncActionMessageRange
 	}
 >
 

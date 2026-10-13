@@ -783,56 +783,67 @@ export const makeSocket = (config: SocketConfig) => {
 			name: '~'
 		}
 		ev.emit('creds.update', authState.creds)
-		await sendNode({
-			tag: 'iq',
-			attrs: {
-				to: S_WHATSAPP_NET,
-				type: 'set',
-				id: generateMessageTag(),
-				xmlns: 'md'
-			},
-			content: [
-				{
-					tag: 'link_code_companion_reg',
-					attrs: {
-						jid: authState.creds.me.id,
-						stage: 'companion_hello',
+		const response = await query(
+			{
+				tag: 'iq',
+				attrs: {
+					to: S_WHATSAPP_NET,
+					type: 'set',
+					id: generateMessageTag(),
+					xmlns: 'md'
+				},
+				content: [
+					{
+						tag: 'link_code_companion_reg',
+						attrs: {
+							jid: authState.creds.me.id,
+							stage: 'companion_hello',
 
-						should_show_push_notification: 'true'
-					},
-					content: [
-						{
-							tag: 'link_code_pairing_wrapped_companion_ephemeral_pub',
-							attrs: {},
-							content: await generatePairingKey()
+							should_show_push_notification: 'true'
 						},
-						{
-							tag: 'companion_server_auth_key_pub',
-							attrs: {},
-							content: authState.creds.noiseKey.public
-						},
-						{
-							tag: 'companion_platform_id',
-							attrs: {},
-							content: getCompanionPlatformId(browser)
-						},
-						{
-							tag: 'companion_platform_display',
-							attrs: {},
-							content: `${browser[1]} (${browser[0]})`
-						},
-						{
-							tag: 'link_code_pairing_nonce',
-							attrs: {},
-							// WA Web parity: the nonce is a single 0x00 byte (new Uint8Array(1)),
-							// not the ASCII '0' (0x30) which serialises as a WABinary string token.
-							content: Buffer.alloc(1)
-						}
-					]
-				}
-			]
-		})
-		return authState.creds.pairingCode
+						content: [
+							{
+								tag: 'link_code_pairing_wrapped_companion_ephemeral_pub',
+								attrs: {},
+								content: await generatePairingKey()
+							},
+							{
+								tag: 'companion_server_auth_key_pub',
+								attrs: {},
+								content: authState.creds.noiseKey.public
+							},
+							{
+								tag: 'companion_platform_id',
+								attrs: {},
+								content: getCompanionPlatformId(browser)
+							},
+							{
+								tag: 'companion_platform_display',
+								attrs: {},
+								content: `${browser[1]} (${browser[0]})`
+							},
+							{
+								tag: 'link_code_pairing_nonce',
+								attrs: {},
+								// WA Web parity: the nonce is a single 0x00 byte (new Uint8Array(1)),
+								// not the ASCII '0' (0x30) which serialises as a WABinary string token.
+								content: Buffer.alloc(1)
+							}
+						]
+					}
+				]
+			},
+			30_000
+		)
+		// A locally generated code is not usable until WhatsApp accepts companion_hello.
+		// waitForMessage may return undefined on timeout, so require an explicit IQ result.
+		if (response?.tag !== 'iq' || response.attrs?.type !== 'result') {
+			throw new Boom('Pairing code registration was not acknowledged', {
+				statusCode: DisconnectReason.timedOut
+			})
+		}
+
+		return pairingCode
 	}
 
 	async function generatePairingKey() {
