@@ -15,6 +15,36 @@ import {
 } from '../WABinary'
 import { makeChatsSocket } from './chats'
 
+/**
+ * A group participant. A bare string is the jid (back-compat). For a LID participant
+ * WA Web also sends the phone number (or username) next to it:
+ * WAWebGroupMutationParticipantUtils.getGroupMutationParticipant -> {lid, phoneNumber|username}
+ * and WASmaxOutGroupsCreateRequest / WASmaxOutGroupsAddParticipantsRequest emit
+ * <participant jid phone_number? username?>. Remove / promote / demote send jid only
+ * (WASmaxOutGroupsRemoveParticipantsRequest, WASmaxOutGroupsPromoteDemoteRequest).
+ */
+export type GroupParticipantInput = string | { jid: string; phone_number?: string; username?: string }
+
+export const participantNode = (p: GroupParticipantInput, withIdentityAttrs: boolean): BinaryNode => {
+	if (typeof p === 'string') {
+		return { tag: 'participant', attrs: { jid: p } }
+	}
+
+	const attrs: { [key: string]: string } = { jid: p.jid }
+	// phone_number / username only ride along a LID jid (WAWebGroupCreateJob: `e.isLid() && r.phoneNumber`)
+	if (withIdentityAttrs && p.jid.endsWith('@lid')) {
+		if (p.phone_number) {
+			attrs.phone_number = p.phone_number
+		}
+
+		if (p.username) {
+			attrs.username = p.username
+		}
+	}
+
+	return { tag: 'participant', attrs }
+}
+
 export const makeGroupsSocket = (config: SocketConfig) => {
 	const sock = makeChatsSocket(config)
 	const { authState, ev, query, upsertMessage } = sock
@@ -87,7 +117,7 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 	return {
 		...sock,
 		groupMetadata,
-		groupCreate: async (subject: string, participants: string[]) => {
+		groupCreate: async (subject: string, participants: GroupParticipantInput[]) => {
 			const key = generateMessageIDV2()
 			const result = await groupQuery('@g.us', 'set', [
 				{
@@ -96,10 +126,7 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 						subject,
 						key
 					},
-					content: participants.map(jid => ({
-						tag: 'participant',
-						attrs: { jid }
-					}))
+					content: participants.map(p => participantNode(p, true))
 				}
 			])
 			return extractGroupMetadata(result)
@@ -157,15 +184,12 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 				return { status: p.attrs.error || '200', jid: p.attrs.jid }
 			})
 		},
-		groupParticipantsUpdate: async (jid: string, participants: string[], action: ParticipantAction) => {
+		groupParticipantsUpdate: async (jid: string, participants: GroupParticipantInput[], action: ParticipantAction) => {
 			const result = await groupQuery(jid, 'set', [
 				{
 					tag: action,
 					attrs: {},
-					content: participants.map(jid => ({
-						tag: 'participant',
-						attrs: { jid }
-					}))
+					content: participants.map(p => participantNode(p, action === 'add'))
 				}
 			])
 			const node = getBinaryNodeChild(result, action)

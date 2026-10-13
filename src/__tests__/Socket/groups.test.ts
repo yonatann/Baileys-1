@@ -1,5 +1,5 @@
 import { Boom } from '@hapi/boom'
-import { extractGroupMetadata } from '../../Socket/groups'
+import { extractGroupMetadata, participantNode } from '../../Socket/groups'
 import type { BinaryNode } from '../../WABinary'
 
 const minimalGroupNode = (overrides: Partial<BinaryNode['attrs']> = {}): BinaryNode => ({
@@ -91,3 +91,33 @@ const captureThrow = (fn: () => unknown): unknown => {
 
 	throw new Error('expected function to throw')
 }
+
+describe('participantNode (WA Web <participant jid phone_number? username?>)', () => {
+	it('bare string -> jid only (back-compat)', () => {
+		expect(participantNode('1@s.whatsapp.net', true)).toEqual({
+			tag: 'participant',
+			attrs: { jid: '1@s.whatsapp.net' }
+		})
+	})
+
+	it('lid participant on create/add carries phone_number', () => {
+		expect(participantNode({ jid: '2@lid', phone_number: '1@s.whatsapp.net' }, true).attrs).toEqual({
+			jid: '2@lid',
+			phone_number: '1@s.whatsapp.net'
+		})
+	})
+
+	it('lid participant may carry username instead', () => {
+		expect(participantNode({ jid: '2@lid', username: 'bob' }, true).attrs).toEqual({ jid: '2@lid', username: 'bob' })
+	})
+
+	it('remove/promote/demote send jid only', () => {
+		expect(participantNode({ jid: '2@lid', phone_number: '1@s.whatsapp.net' }, false).attrs).toEqual({ jid: '2@lid' })
+	})
+
+	it('phone_number never rides a pn jid', () => {
+		expect(participantNode({ jid: '1@s.whatsapp.net', phone_number: '1@s.whatsapp.net' }, true).attrs).toEqual({
+			jid: '1@s.whatsapp.net'
+		})
+	})
+})
