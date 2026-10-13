@@ -1,8 +1,8 @@
 import { LRUCache } from 'lru-cache'
 import type { LIDMapping, SignalKeyStoreWithTransaction } from '../Types'
 import type { ILogger } from '../Utils/logger'
-import { classifyLidPnConflict } from './lid-conflict'
 import { isHostedPnUser, isLidUser, isPnUser, jidDecode, jidNormalizedUser, WAJIDDomains } from '../WABinary'
+import { classifyLidPnConflict } from './lid-conflict'
 
 export interface LIDMappingStoreOptions {
 	/** How long a pn→lid USync MISS suppresses re-querying that pn (default 2 min). */
@@ -148,13 +148,11 @@ export class LIDMappingStore {
 				if (this.mappingCache.get(`lid:${pnUser}`) === undefined) lookupKeys.add(`${pnUser}_reverse`)
 			}
 
-			const stored: { [_: string]: string } = lookupKeys.size
-				? await this.keys.get('lid-mapping', [...lookupKeys])
-				: {}
+			const stored: { [_: string]: string } = lookupKeys.size ? await this.keys.get('lid-mapping', [...lookupKeys]) : {}
 
 			for (const { pnUser, lidUser, learningSource } of pairs) {
 				const cachedPnUserForLid =
-					(this.mappingCache.get(`lid:${lidUser}`) as string | undefined) ?? (stored[`${lidUser}_reverse`] as string | undefined)
+					this.mappingCache.get(`lid:${lidUser}`) ?? (stored[`${lidUser}_reverse`] as string | undefined)
 				const pnUserIsCachedLid =
 					this.mappingCache.get(`lid:${pnUser}`) !== undefined || stored[`${pnUser}_reverse`] !== undefined
 				const conflict = classifyLidPnConflict({

@@ -6,7 +6,7 @@
 
 /** WA Web WAWebWidDevTools.isWidClientAssigned (b06.js ~@379990): LID user with bit 16 (65536) set. */
 export const isClientAssignedLidUser = (lidUser: string | undefined): boolean => {
-	if (lidUser == null) {
+	if (lidUser === null || lidUser === undefined) {
 		return false
 	}
 

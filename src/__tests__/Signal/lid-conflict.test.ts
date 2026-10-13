@@ -81,20 +81,21 @@ describe('LIDMappingStore conflict logging (log only, writes unchanged)', () => 
 		const keys = {
 			get: jest.fn<SignalKeyStoreWithTransaction['get']>() as any,
 			set: jest.fn<SignalKeyStoreWithTransaction['set']>(),
-			transaction: jest.fn<SignalKeyStoreWithTransaction['transaction']>(async (work: () => any) => await work()) as any,
+			transaction: jest.fn<SignalKeyStoreWithTransaction['transaction']>(
+				async (work: () => any) => await work()
+			) as any,
 			isInTransaction: jest.fn<SignalKeyStoreWithTransaction['isInTransaction']>()
 		}
 		return keys as any
 	}
+
 	const LID = '111@lid'
 	const PN = '222@s.whatsapp.net'
 
 	it('logs a conflict with the learning source and still writes the same batch as before', async () => {
 		const keys = makeKeys()
 		// 1st get: PN cache-miss read (empty). 2nd get: conflict read, LID 111 cached to PN 333.
-		keys.get
-			.mockResolvedValueOnce({} as any)
-			.mockResolvedValueOnce({ '111_reverse': '333' } as any)
+		keys.get.mockResolvedValueOnce({} as any).mockResolvedValueOnce({ '111_reverse': '333' } as any)
 		const logger = P({ level: 'silent' })
 		const warn = jest.spyOn(logger, 'warn')
 		const store = new LIDMappingStore(keys, logger)
@@ -110,12 +111,12 @@ describe('LIDMappingStore conflict logging (log only, writes unchanged)', () => 
 
 	it('a failing conflict read never blocks the write (log-only)', async () => {
 		const keys = makeKeys()
-		keys.get
-			.mockResolvedValueOnce({} as any)
-			.mockRejectedValueOnce(new Error('db down'))
+		keys.get.mockResolvedValueOnce({} as any).mockRejectedValueOnce(new Error('db down'))
 		const store = new LIDMappingStore(keys, P({ level: 'silent' }))
 
-		await expect(store.storeLIDPNMappings([{ lid: LID, pn: PN, learningSource: 'usync' } as LIDMapping])).resolves.toBeUndefined()
+		await expect(
+			store.storeLIDPNMappings([{ lid: LID, pn: PN, learningSource: 'usync' } as LIDMapping])
+		).resolves.toBeUndefined()
 		expect(keys.set).toHaveBeenCalledTimes(1)
 	})
 
@@ -124,7 +125,9 @@ describe('LIDMappingStore conflict logging (log only, writes unchanged)', () => 
 		keys.get.mockResolvedValue({} as any)
 		const logger = P({ level: 'silent' })
 		const warn = jest.spyOn(logger, 'warn')
-		await new LIDMappingStore(keys, logger).storeLIDPNMappings([{ lid: LID, pn: PN, learningSource: 'usync' } as LIDMapping])
+		await new LIDMappingStore(keys, logger).storeLIDPNMappings([
+			{ lid: LID, pn: PN, learningSource: 'usync' } as LIDMapping
+		])
 		expect(warn).not.toHaveBeenCalledWith(expect.anything(), expect.stringMatching(/^lid-pn-mapping-conflict/))
 	})
 })
