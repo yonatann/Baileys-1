@@ -16,11 +16,7 @@ function serverSyncNode(names: string[]): BinaryNode {
 describe('server_sync collection extraction (D2 / BE#662)', () => {
 	it('returns ALL collection names, not just the first', () => {
 		const node = serverSyncNode(['critical_block', 'regular_high', 'regular_low'])
-		expect(collectServerSyncCollectionNames(node)).toEqual([
-			'critical_block',
-			'regular_high',
-			'regular_low'
-		])
+		expect(collectServerSyncCollectionNames(node)).toEqual(['critical_block', 'regular_high', 'regular_low'])
 	})
 
 	it('returns the single collection name when only one is present', () => {

@@ -1,8 +1,8 @@
 import P from 'pino'
 import {
+	type AccountSyncReconcileResult,
 	extractAccountSyncDeviceSync,
-	reconcileOwnDevicesOnAccountSync,
-	type AccountSyncReconcileResult
+	reconcileOwnDevicesOnAccountSync
 } from '../../Utils/account-sync-handler'
 import { type BinaryNode } from '../../WABinary'
 
@@ -174,28 +174,19 @@ describe('account_sync device-list reconcile — orchestrator (D1 / BE#661, B1+B
 
 	it('USyncs with the BARE me.id user jid when the list is empty (B1 fix)', async () => {
 		const { calls, deps } = makeDeps()
-		await reconcileOwnDevicesOnAccountSync(
-			{ ...base, deviceJids: [], ownDevicePresent: false, needsUsync: true },
-			deps
-		)
+		await reconcileOwnDevicesOnAccountSync({ ...base, deviceJids: [], ownDevicePresent: false, needsUsync: true }, deps)
 		expect(calls.usync).toEqual([['15551230000@s.whatsapp.net']])
 	})
 
 	it('runs getUSyncDevices OUTSIDE the devices mutex (B2 deadlock guard)', async () => {
 		const { calls, deps } = makeDeps()
-		await reconcileOwnDevicesOnAccountSync(
-			{ ...base, deviceJids: [], ownDevicePresent: false, needsUsync: true },
-			deps
-		)
+		await reconcileOwnDevicesOnAccountSync({ ...base, deviceJids: [], ownDevicePresent: false, needsUsync: true }, deps)
 		expect(calls.usyncWhileLocked).toBe(false)
 	})
 
 	it('does NOT USync during offline processing', async () => {
 		const { calls, deps } = makeDeps({ offline: true })
-		await reconcileOwnDevicesOnAccountSync(
-			{ ...base, deviceJids: [], ownDevicePresent: false, needsUsync: true },
-			deps
-		)
+		await reconcileOwnDevicesOnAccountSync({ ...base, deviceJids: [], ownDevicePresent: false, needsUsync: true }, deps)
 		expect(calls.usync).toEqual([])
 	})
 

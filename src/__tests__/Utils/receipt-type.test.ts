@@ -47,6 +47,8 @@ describe('resolveIncomingReceiptType branch ordering', () => {
 	})
 	it('otherwise content-based', () => {
 		expect(resolveIncomingReceiptType({ category: undefined, fromMe: false, message: react })).toBe('inactive')
-		expect(resolveIncomingReceiptType({ category: undefined, fromMe: false, message: { conversation: 'a' } })).toBeUndefined()
+		expect(
+			resolveIncomingReceiptType({ category: undefined, fromMe: false, message: { conversation: 'a' } })
+		).toBeUndefined()
 	})
 })

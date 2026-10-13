@@ -1,4 +1,4 @@
-import { getBinaryNodeChild, type BinaryNode, S_WHATSAPP_NET } from '../WABinary'
+import { type BinaryNode, getBinaryNodeChild, S_WHATSAPP_NET } from '../WABinary'
 
 /**
  * WA Web parity (B5): login-time prekey traffic.
