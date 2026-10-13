@@ -4,9 +4,9 @@ import { join } from 'path'
 import { deflateSync } from 'zlib'
 import { proto } from '../../../WAProto/index.js'
 import type { WAMessage } from '../../Types'
+import { aesDecryptGCM, hkdf } from '../../Utils/crypto'
 import { makeEventBuffer } from '../../Utils/event-buffer'
 import { createHistorySyncAcker, markHttpNetworkError } from '../../Utils/history'
-import { aesDecryptGCM, hkdf } from '../../Utils/crypto'
 import { buildHistSyncServerErrorReceiptNode, getHttpStream, isHttpNetworkError } from '../../Utils/messages-media'
 import processMessage from '../../Utils/process-message'
 
@@ -236,7 +236,7 @@ describe('hist_sync receipt policy (WA Web b07)', () => {
 
 	describe('download vs post-download failures (WA Web b07@559300 decode -> outer catch, no receipt)', () => {
 		it('an inline payload that cannot be inflated throws and sends NO error receipt', async () => {
-			const onDownloadFailed = jest.fn(async (..._args: unknown[]) => {})
+			const onDownloadFailed = jest.fn<(...args: unknown[]) => Promise<void>>(async () => {})
 			const order: string[] = []
 			await expect(
 				processMessage(
@@ -250,7 +250,7 @@ describe('hist_sync receipt policy (WA Web b07)', () => {
 		})
 
 		it('a failing DOWNLOAD reaches onDownloadFailed with the error and still rethrows', async () => {
-			const onDownloadFailed = jest.fn(async (..._args: unknown[]) => {})
+			const onDownloadFailed = jest.fn<(...args: unknown[]) => Promise<void>>(async () => {})
 			const order: string[] = []
 			await expect(
 				processMessage(
@@ -311,7 +311,7 @@ describe('hist_sync receipt policy (WA Web b07)', () => {
 		it('SPOOF at the process-message guard: nothing is stored and no receipt or hook runs', async () => {
 			const order: string[] = []
 			const chunkAck = jest.fn(() => async () => {})
-			const onDownloadFailed = jest.fn(async (..._args: unknown[]) => {})
+			const onDownloadFailed = jest.fn<(...args: unknown[]) => Promise<void>>(async () => {})
 			await processMessage(
 				makeHistoryMsg(T.RECENT, validPayload(T.RECENT), false),
 				makeCtx(true, recordingEv(order), { historySyncAcker: { chunkAck, onDownloadFailed } }) as any
@@ -359,7 +359,7 @@ describe('getHttpStream network classification (WA Web maps only fetch TypeError
 describe('a failing server-error receipt never replaces the download error', () => {
 	it('processMessage rejects with the original download error when onDownloadFailed also rejects', async () => {
 		const order: string[] = []
-		const onDownloadFailed = jest.fn(async (..._args: unknown[]) => {
+		const onDownloadFailed = jest.fn<(...args: unknown[]) => Promise<void>>(async () => {
 			throw new Error('socket closed')
 		})
 		const err = await processMessage(

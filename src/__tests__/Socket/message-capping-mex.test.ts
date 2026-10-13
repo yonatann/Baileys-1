@@ -12,8 +12,13 @@ describe('fetchNewChatMessageCappingInfo', () => {
 		const query = async (node: BinaryNode): Promise<BinaryNode> => {
 			sent.push(node)
 			const data = { data: { xwa2_message_capping_info: { total_quota: 50, used_quota: 3, capping_status: 'NONE' } } }
-			return { tag: 'iq', attrs: { type: 'result' }, content: [{ tag: 'result', attrs: {}, content: Buffer.from(JSON.stringify(data)) }] }
+			return {
+				tag: 'iq',
+				attrs: { type: 'result' },
+				content: [{ tag: 'result', attrs: {}, content: Buffer.from(JSON.stringify(data)) }]
+			}
 		}
+
 		return { sent, query }
 	}
 

@@ -31,12 +31,12 @@ import type { QuickReplyAction } from '../Types/Bussines.js'
 import type { LabelActionBody } from '../Types/Label'
 import { SyncState } from '../Types/State'
 import {
-	chatModificationToAppPatch,
-	commitAppPatch,
-	type ChatMutationMap,
-	decodePatches,
-	AppStateRetryGate,
 	appStateRetryBackoffMs,
+	AppStateRetryGate,
+	chatModificationToAppPatch,
+	type ChatMutationMap,
+	commitAppPatch,
+	decodePatches,
 	decodeSyncdSnapshot,
 	delay,
 	encodeSyncdPatch,
@@ -49,8 +49,8 @@ import {
 	MAX_SYNC_ATTEMPTS,
 	newLTHashState,
 	partitionByRetryGate,
-	trackGatedCollection,
-	processSyncAction
+	processSyncAction,
+	trackGatedCollection
 } from '../Utils'
 import { clampAbPropsRefreshSec, dispatchAccountSyncDirtyProtocols, planInitQueries } from '../Utils/init-queries'
 import { makeMutex } from '../Utils/make-mutex'
@@ -799,7 +799,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 									`${name} blocked on missing key from v${states[name].version}, retrying with snapshot`
 								)
 								forceSnapshotCollections.add(name)
-								retryBackoffMs = Math.max(retryBackoffMs, appStateRetryBackoffMs(attemptsMap[name]! - 1))
+								retryBackoffMs = Math.max(retryBackoffMs, appStateRetryBackoffMs(attemptsMap[name] - 1))
 							} else if (isAppStateSyncIrrecoverable(error, attemptsMap[name])) {
 								const cooldownMs = appStateRetryGate.recordFailure(name, Date.now())
 								logger.warn(
@@ -813,7 +813,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 								// force a full snapshot on retry to recover from
 								// corrupted local state (e.g. LTHash MAC mismatch)
 								forceSnapshotCollections.add(name)
-								retryBackoffMs = Math.max(retryBackoffMs, appStateRetryBackoffMs(attemptsMap[name]! - 1))
+								retryBackoffMs = Math.max(retryBackoffMs, appStateRetryBackoffMs(attemptsMap[name] - 1))
 							}
 						}
 					}

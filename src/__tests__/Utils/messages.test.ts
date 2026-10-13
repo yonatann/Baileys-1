@@ -7,16 +7,16 @@ describe('generateWAMessageContent — messageSecret option', () => {
 
 	// Stub upload that returns the minimal shape prepareWAMessageMedia expects
 	const makeUploadStub = () =>
-		jest.fn().mockResolvedValue({
+		jest.fn<() => Promise<{ mediaUrl: string; directPath: string }>>().mockResolvedValue({
 			mediaUrl: 'https://example.com/uploaded',
-			directPath: '/v/t62.7117-24/x',
+			directPath: '/v/t62.7117-24/x'
 		}) as any
 
 	it('text: round-trips supplied messageSecret on extendedTextMessage', async () => {
-		const m: any = await generateWAMessageContent(
-			{ text: 'hello' },
-			{ userJid: 'me@s.whatsapp.net', messageSecret: knownSecret } as any,
-		)
+		const m: any = await generateWAMessageContent({ text: 'hello' }, {
+			userJid: 'me@s.whatsapp.net',
+			messageSecret: knownSecret
+		} as any)
 		expect(m.messageContextInfo?.messageSecret).toBeDefined()
 		expect(Buffer.from(m.messageContextInfo.messageSecret)).toEqual(Buffer.from(knownSecret))
 	})
@@ -25,7 +25,7 @@ describe('generateWAMessageContent — messageSecret option', () => {
 		// Pass media as a Buffer to avoid network I/O inside encryptedStream
 		const m: any = await generateWAMessageContent(
 			{ image: Buffer.alloc(16), caption: 'cap' } as any,
-			{ userJid: 'me@s.whatsapp.net', messageSecret: knownSecret, upload: makeUploadStub() } as any,
+			{ userJid: 'me@s.whatsapp.net', messageSecret: knownSecret, upload: makeUploadStub() } as any
 		)
 		expect(Buffer.from(m.messageContextInfo.messageSecret)).toEqual(Buffer.from(knownSecret))
 	})
@@ -33,7 +33,7 @@ describe('generateWAMessageContent — messageSecret option', () => {
 	it('video: round-trips on videoMessage', async () => {
 		const m: any = await generateWAMessageContent(
 			{ video: Buffer.alloc(16) } as any,
-			{ userJid: 'me@s.whatsapp.net', messageSecret: knownSecret, upload: makeUploadStub() } as any,
+			{ userJid: 'me@s.whatsapp.net', messageSecret: knownSecret, upload: makeUploadStub() } as any
 		)
 		expect(Buffer.from(m.messageContextInfo.messageSecret)).toEqual(Buffer.from(knownSecret))
 	})
@@ -41,7 +41,7 @@ describe('generateWAMessageContent — messageSecret option', () => {
 	it('audio: round-trips on audioMessage', async () => {
 		const m: any = await generateWAMessageContent(
 			{ audio: Buffer.alloc(16), mimetype: 'audio/ogg' } as any,
-			{ userJid: 'me@s.whatsapp.net', messageSecret: knownSecret, upload: makeUploadStub() } as any,
+			{ userJid: 'me@s.whatsapp.net', messageSecret: knownSecret, upload: makeUploadStub() } as any
 		)
 		expect(Buffer.from(m.messageContextInfo.messageSecret)).toEqual(Buffer.from(knownSecret))
 	})
@@ -49,7 +49,7 @@ describe('generateWAMessageContent — messageSecret option', () => {
 	it('document: round-trips on documentMessage', async () => {
 		const m: any = await generateWAMessageContent(
 			{ document: Buffer.alloc(16), mimetype: 'application/pdf' } as any,
-			{ userJid: 'me@s.whatsapp.net', messageSecret: knownSecret, upload: makeUploadStub() } as any,
+			{ userJid: 'me@s.whatsapp.net', messageSecret: knownSecret, upload: makeUploadStub() } as any
 		)
 		expect(Buffer.from(m.messageContextInfo.messageSecret)).toEqual(Buffer.from(knownSecret))
 	})
@@ -57,16 +57,13 @@ describe('generateWAMessageContent — messageSecret option', () => {
 	it('sticker: round-trips on stickerMessage', async () => {
 		const m: any = await generateWAMessageContent(
 			{ sticker: Buffer.alloc(16) } as any,
-			{ userJid: 'me@s.whatsapp.net', messageSecret: knownSecret, upload: makeUploadStub() } as any,
+			{ userJid: 'me@s.whatsapp.net', messageSecret: knownSecret, upload: makeUploadStub() } as any
 		)
 		expect(Buffer.from(m.messageContextInfo.messageSecret)).toEqual(Buffer.from(knownSecret))
 	})
 
 	it('option absent: still generates 32 random bytes (existing behavior preserved)', async () => {
-		const m: any = await generateWAMessageContent(
-			{ text: 'no secret here' },
-			{ userJid: 'me@s.whatsapp.net' } as any,
-		)
+		const m: any = await generateWAMessageContent({ text: 'no secret here' }, { userJid: 'me@s.whatsapp.net' } as any)
 		expect(m.messageContextInfo?.messageSecret).toBeDefined()
 		expect(m.messageContextInfo.messageSecret.length).toBe(32)
 		// Sanity: not all zeros (would imply we set something we shouldn't have).
@@ -75,31 +72,37 @@ describe('generateWAMessageContent — messageSecret option', () => {
 	})
 
 	it('conflict: poll messageSecret wins over option', async () => {
-		const optionSecret = new Uint8Array(32).fill(0xAB)
-		const pollSecret = new Uint8Array(32).fill(0xCD)
-		const m: any = await generateWAMessageContent({
-			poll: {
-				name: 'q?',
-				values: ['a', 'b'],
-				selectableCount: 1,
-				messageSecret: pollSecret,
-			},
-		} as any, { userJid: 'me@s.whatsapp.net', messageSecret: optionSecret } as any)
+		const optionSecret = new Uint8Array(32).fill(0xab)
+		const pollSecret = new Uint8Array(32).fill(0xcd)
+		const m: any = await generateWAMessageContent(
+			{
+				poll: {
+					name: 'q?',
+					values: ['a', 'b'],
+					selectableCount: 1,
+					messageSecret: pollSecret
+				}
+			} as any,
+			{ userJid: 'me@s.whatsapp.net', messageSecret: optionSecret } as any
+		)
 		// Poll's own slot is set BEFORE our option-handler runs, and our handler
 		// gates on `!m.messageContextInfo?.messageSecret`, so poll's bytes survive.
 		expect(Buffer.from(m.messageContextInfo.messageSecret)).toEqual(Buffer.from(pollSecret))
 	})
 
 	it('conflict: option falls through when poll does NOT supply its own secret (poll fallback random shadows option)', async () => {
-		const optionSecret = new Uint8Array(32).fill(0xAB)
-		const m: any = await generateWAMessageContent({
-			poll: {
-				name: 'q?',
-				values: ['a', 'b'],
-				selectableCount: 1,
-				// no messageSecret here
-			},
-		} as any, { userJid: 'me@s.whatsapp.net', messageSecret: optionSecret } as any)
+		const optionSecret = new Uint8Array(32).fill(0xab)
+		const m: any = await generateWAMessageContent(
+			{
+				poll: {
+					name: 'q?',
+					values: ['a', 'b'],
+					selectableCount: 1
+					// no messageSecret here
+				}
+			} as any,
+			{ userJid: 'me@s.whatsapp.net', messageSecret: optionSecret } as any
+		)
 		// Poll's branch generates randomBytes(32) for its own slot today; our
 		// option-handler only fills in when no secret exists. So poll's random
 		// bytes win and the option is shadowed. This test documents the

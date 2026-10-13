@@ -67,11 +67,7 @@ const getClientPayload = (config: SocketConfig) => {
 	return payload
 }
 
-export const generateLoginNode = (
-	userJid: string,
-	config: SocketConfig,
-	loginCounter = 0
-): proto.IClientPayload => {
+export const generateLoginNode = (userJid: string, config: SocketConfig, loginCounter = 0): proto.IClientPayload => {
 	const { user, device } = jidDecode(userJid)!
 	const payload: proto.IClientPayload = {
 		...getClientPayload(config),
@@ -118,17 +114,17 @@ const getPlatformType = (platform: string): proto.DeviceProps.PlatformType => {
  * present a current OS (and makes the stock `Browsers.macOS` default's "14.4.1"
  * flow through). Falls back to 10.15.7 only when no usable version is supplied.
  */
-export const parseOsVersion = (
-	v: string | undefined
-): { primary: number, secondary: number, tertiary: number } => {
+export const parseOsVersion = (v: string | undefined): { primary: number; secondary: number; tertiary: number } => {
 	const parts = (v ?? '').split('.').map(n => parseInt(n, 10))
 	const at = (i: number): number => {
 		const n = parts[i]
 		return typeof n === 'number' && Number.isFinite(n) ? n : 0
 	}
-	if(!Number.isFinite(parts[0])) {
+
+	if (!Number.isFinite(parts[0])) {
 		return { primary: 10, secondary: 15, tertiary: 7 }
 	}
+
 	return { primary: at(0), secondary: at(1), tertiary: at(2) }
 }
 

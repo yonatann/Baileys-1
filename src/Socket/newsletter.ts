@@ -25,9 +25,7 @@ const parseNewsletterCreateResponse = (response: NewsletterCreateResponse | null
 		// `thread.picture: null`. Guard against the null so the parse doesn't
 		// throw `Cannot read properties of null (reading 'id')` on every
 		// successful create.
-		picture: thread?.picture
-			? { id: thread.picture.id, directPath: thread.picture.direct_path }
-			: undefined,
+		picture: thread?.picture ? { id: thread.picture.id, directPath: thread.picture.direct_path } : undefined,
 		mute_state: viewer?.mute
 	}
 }

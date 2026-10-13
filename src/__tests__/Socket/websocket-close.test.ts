@@ -17,6 +17,7 @@ function fakeSocket(clean: boolean) {
 			setImmediate(() => ee.emit('close'))
 		}
 	}
+
 	return ee
 }
 

@@ -19,6 +19,7 @@ import {
 	bindWaitForEvent,
 	decryptMediaRetryData,
 	DEF_MEDIA_HOST,
+	DEFAULT_LID_REFETCH_THROTTLE_SEC,
 	encodeNewsletterMessage,
 	encodeSignedDeviceIdentity,
 	encodeWAMessage,
@@ -35,7 +36,6 @@ import {
 	normalizeMessageContent,
 	parseAndInjectE2ESessions,
 	selectLidsForForceRefetch,
-	DEFAULT_LID_REFETCH_THROTTLE_SEC,
 	unixTimestampSeconds
 } from '../Utils'
 import { getUrlInfo } from '../Utils/link-preview'
@@ -469,6 +469,21 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		)
 	}
 
+	/** Per-JID fallback after a failed batch assertSessions: keeps only the devices that answer. */
+	const assertSessionsPerJid = async (jids: string[]): Promise<string[]> => {
+		const reachable: string[] = []
+		for (const jid of jids) {
+			try {
+				await assertSessions([jid])
+				reachable.push(jid)
+			} catch (e) {
+				logger.warn({ jid, err: (e as Error).message }, 'skipping unreachable participant device')
+			}
+		}
+
+		return reachable
+	}
+
 	const assertSessions = async (jids: string[], force?: boolean) => {
 		let didFetchNewSession = false
 		const uniqueJids = [...new Set(jids)]
@@ -826,26 +841,20 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					let reachableRecipients = [...senderKeySessionTargets]
 					try {
 						await assertSessions(senderKeySessionTargets)
-					} catch(sessionErr) {
+					} catch (sessionErr) {
 						const isRecoverable = ['not-acceptable', 'Timed Out', 'No sessions'].includes((sessionErr as Error).message)
-						if(isRecoverable && senderKeySessionTargets.length > 1) {
-							logger.warn({ count: senderKeySessionTargets.length, err: (sessionErr as Error).message },
-								'batch assertSessions failed — retrying per-JID to skip unreachable devices')
-							reachableRecipients = []
-							for(const candidateJid of senderKeySessionTargets) {
-								try {
-									await assertSessions([candidateJid])
-									reachableRecipients.push(candidateJid)
-								} catch(e) {
-									logger.warn({ jid: candidateJid, err: (e as Error).message }, 'skipping unreachable participant device')
-								}
-							}
-						} else {
+						if (!isRecoverable || senderKeySessionTargets.length <= 1) {
 							throw sessionErr
 						}
+
+						logger.warn(
+							{ count: senderKeySessionTargets.length, err: (sessionErr as Error).message },
+							'batch assertSessions failed — retrying per-JID to skip unreachable devices'
+						)
+						reachableRecipients = await assertSessionsPerJid(senderKeySessionTargets)
 					}
 
-					if(reachableRecipients.length) {
+					if (reachableRecipients.length) {
 						const result = await createParticipantNodes(reachableRecipients, senderKeyMsg, extraAttrs)
 						shouldIncludeDeviceIdentity = shouldIncludeDeviceIdentity || result.shouldIncludeDeviceIdentity
 						participants.push(...result.nodes)

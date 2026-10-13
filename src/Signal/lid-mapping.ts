@@ -252,6 +252,7 @@ export class LIDMappingStore {
 				const u = jidDecode(pair.pn)?.user
 				if (u) answered.add(u)
 			}
+
 			for (const pnJid of Object.keys(usyncFetch)) {
 				const u = jidDecode(pnJid)?.user
 				if (u && !answered.has(u)) this.rememberMiss(u)
