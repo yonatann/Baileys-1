@@ -16,8 +16,8 @@ describe('processHistoryMessage', () => {
 			const result = processHistoryMessage(historySync)
 
 			expect(result.lidPnMappings).toEqual([
-				{ lid: '11111111111111@lid', pn: '1234567890123@s.whatsapp.net' },
-				{ lid: '22222222222222@lid', pn: '9876543210987@s.whatsapp.net' }
+				{ lid: '11111111111111@lid', pn: '1234567890123@s.whatsapp.net', learningSource: 'history-sync-chunk' },
+				{ lid: '22222222222222@lid', pn: '9876543210987@s.whatsapp.net', learningSource: 'history-sync-chunk' }
 			])
 		})
 
@@ -34,7 +34,9 @@ describe('processHistoryMessage', () => {
 
 			const result = processHistoryMessage(historySync)
 
-			expect(result.lidPnMappings).toEqual([{ lid: '22222222222222@lid', pn: '9876543210987@s.whatsapp.net' }])
+			expect(result.lidPnMappings).toEqual([
+				{ lid: '22222222222222@lid', pn: '9876543210987@s.whatsapp.net', learningSource: 'history-sync-chunk' }
+			])
 		})
 
 		it('should return empty array when no mappings exist', () => {
@@ -61,7 +63,9 @@ describe('processHistoryMessage', () => {
 
 				const result = processHistoryMessage(historySync)
 
-				expect(result.lidPnMappings).toEqual([{ lid: '11111111111111@lid', pn: '1234567890123@s.whatsapp.net' }])
+				expect(result.lidPnMappings).toEqual([
+					{ lid: '11111111111111@lid', pn: '1234567890123@s.whatsapp.net', learningSource: 'history-sync-chunk' }
+				])
 			}
 		})
 	})
@@ -165,7 +169,8 @@ describe('processHistoryMessage', () => {
 			expect(result.lidPnMappings).toHaveLength(2)
 			expect(result.lidPnMappings).toContainEqual({
 				lid: '11111111111111@lid',
-				pn: '1111111111111@s.whatsapp.net'
+				pn: '1111111111111@s.whatsapp.net',
+				learningSource: 'history-sync-chunk'
 			})
 			expect(result.lidPnMappings).toContainEqual({
 				lid: '22222222222222@lid',

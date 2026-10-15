@@ -83,7 +83,7 @@ export const processHistoryMessage = (item: proto.IHistorySync, logger?: ILogger
 	// Extract LID-PN mappings for all sync types
 	for (const m of item.phoneNumberToLidMappings || []) {
 		if (m.lidJid && m.pnJid) {
-			lidPnMappings.push({ lid: m.lidJid, pn: m.pnJid })
+			lidPnMappings.push({ lid: m.lidJid, pn: m.pnJid, learningSource: 'history-sync-chunk' })
 		}
 	}
 
