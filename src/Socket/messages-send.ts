@@ -50,7 +50,7 @@ import { shouldHideDecryptFail } from '../Utils/decrypt-fail'
 import { getUrlInfo } from '../Utils/link-preview'
 import { makeKeyedMutex, makeMutex } from '../Utils/make-mutex'
 import { encryptMessageEdit } from '../Utils/message-edit-secret'
-import { buildNewsletterMessageNode } from '../Utils/newsletter-stanza'
+import { buildNewsletterMessageNode, captureUploadHandle } from '../Utils/newsletter-stanza'
 import { getMessageReportingToken, isRevokeMessage, shouldIncludeReportingToken } from '../Utils/reporting-utils'
 import {
 	buildMergedTcTokenIndexWrite,
@@ -72,6 +72,7 @@ import {
 	isJidBot,
 	isJidGroup,
 	isJidMetaAI,
+	isJidNewsletter,
 	isLidUser,
 	isPnUser,
 	jidDecode,
@@ -676,7 +677,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			useUserDevicesCache,
 			useCachedGroupMetadata,
 			statusJidList,
-			reportingMessage: reportingMessageOverride
+			reportingMessage: reportingMessageOverride,
+			newsletterMediaHandle
 		}: MessageRelayOptions
 	) => {
 		const meId = assertMeId(authState.creds)
@@ -744,6 +746,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					message: patched as proto.IMessage,
 					messageType: getMessageType(message),
 					mediaType,
+					mediaHandle: newsletterMediaHandle,
 					additionalAttributes
 				})
 				logger.debug({ msgId }, `sending newsletter message to ${jid}`)
@@ -1470,6 +1473,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 						: disappearingMessagesInChat
 				await groupToggleEphemeral(jid, value)
 			} else {
+				// channels publish the upload handle as media_id; capture it from the media upload
+				const newsletterUpload = isJidNewsletter(jid) ? captureUploadHandle(waUploadToServer) : undefined
 				const fullMsg = await generateWAMessage(jid, content, {
 					logger,
 					userJid,
@@ -1486,7 +1491,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					//TODO: CACHE
 					getProfilePicUrl: sock.profilePictureUrl,
 					getCallLink: sock.createCallLink,
-					upload: waUploadToServer,
+					upload: newsletterUpload?.upload ?? waUploadToServer,
 					mediaCache: config.mediaCache,
 					options: config.options,
 					messageId: generateMessageIDV2(sock.user?.id),
@@ -1549,7 +1554,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					additionalAttributes,
 					statusJidList: options.statusJidList,
 					additionalNodes,
-					reportingMessage
+					reportingMessage,
+					newsletterMediaHandle: newsletterUpload?.getHandle()
 				})
 				if (config.emitOwnEvents) {
 					process.nextTick(async () => {

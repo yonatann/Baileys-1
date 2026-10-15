@@ -1,5 +1,7 @@
 import { proto } from '../../../WAProto/index.js'
-import { buildNewsletterMessageNode } from '../../Utils/newsletter-stanza'
+import type { WAMediaUploadFunction } from '../../Types'
+import { generateWAMessage } from '../../Utils/messages'
+import { buildNewsletterMessageNode, captureUploadHandle } from '../../Utils/newsletter-stanza'
 import type { BinaryNode } from '../../WABinary'
 
 // synthetic ids only
@@ -174,5 +176,38 @@ describe('buildNewsletterMessageNode (WA Web channel stanza shapes)', () => {
 		})
 		expect(node.attrs).toEqual({ to: JID, id: NEW_ID, type: 'text' })
 		expect(children(node).map(c => [c.tag, c.attrs])).toEqual([['plaintext', {}]])
+	})
+})
+
+describe('captureUploadHandle (upload handle -> media_id)', () => {
+	const fakeUpload =
+		(handle?: string): WAMediaUploadFunction =>
+		async () => ({ mediaUrl: undefined, directPath: '/o1/v/t24/f2/m0/z', handle })
+
+	it('keeps the handle from the newsletter media upload so it can be published as media_id', async () => {
+		const capture = captureUploadHandle(fakeUpload('wa_channel_ptt/flat/11111111111111111111111111111111'))
+		const msg = await generateWAMessage(
+			JID,
+			{ document: Buffer.from('synthetic file'), mimetype: 'application/octet-stream', fileName: 'a.bin' },
+			{ userJid: '15550000001@s.whatsapp.net', upload: capture.upload }
+		)
+		expect(msg.message?.documentMessage?.directPath).toBe('/o1/v/t24/f2/m0/z')
+		expect(capture.getHandle()).toBe('wa_channel_ptt/flat/11111111111111111111111111111111')
+
+		const node = buildNewsletterMessageNode({
+			jid: JID,
+			msgId: NEW_ID,
+			message: msg.message!,
+			messageType: 'media',
+			mediaType: 'ptt',
+			mediaHandle: capture.getHandle()
+		})
+		expect(node.attrs.media_id).toBe('wa_channel_ptt/flat/11111111111111111111111111111111')
+	})
+
+	it('yields no handle when the upload returns none (e.g. documents)', async () => {
+		const capture = captureUploadHandle(fakeUpload(undefined))
+		await capture.upload('/dev/null', { fileEncSha256B64: 'x', mediaType: 'document', newsletter: true })
+		expect(capture.getHandle()).toBeUndefined()
 	})
 })

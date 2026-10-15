@@ -1,4 +1,5 @@
 import { proto } from '../../WAProto/index.js'
+import type { WAMediaUploadFunction } from '../Types'
 import type { BinaryNode, BinaryNodeAttributes } from '../WABinary'
 import { encodeNewsletterMessage } from './generics'
 import { normalizeMessageContent } from './messages'
@@ -129,4 +130,20 @@ const newsletterMediaType = (message: proto.IMessage): string => {
 	if (content?.documentMessage) return 'document'
 	if (content?.stickerMessage) return 'sticker'
 	return ''
+}
+
+/**
+ * Wraps an upload function so the media `handle` from the upload response can be
+ * published as the channel `media_id` (WA Web: UnencryptedMediaEntry.handle -> mediaHandle).
+ * Only the last upload's handle is kept; a media-cache hit does no upload and yields none.
+ */
+export const captureUploadHandle = (upload: WAMediaUploadFunction) => {
+	let handle: string | undefined
+	const wrapped: WAMediaUploadFunction = async (filePath, opts) => {
+		const result = await upload(filePath, opts)
+		handle = result.handle
+		return result
+	}
+
+	return { upload: wrapped, getHandle: () => handle }
 }

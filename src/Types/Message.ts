@@ -330,6 +330,8 @@ export type MessageRelayOptions = MinimalRelayOptions & {
 	statusJidList?: string[]
 	/** compute the <reporting> token over this proto instead of the relayed one (encrypted edits) */
 	reportingMessage?: proto.IMessage
+	/** channel media only: upload `handle`, published as the `media_id` attribute (as WA Web does) */
+	newsletterMediaHandle?: string
 }
 
 export type MiscMessageGenerationOptions = MinimalRelayOptions & {
@@ -367,6 +369,8 @@ export type WAMediaUploadFunction = (
 	fbid?: number
 	thumbnailDirectPath?: string
 	thumbnailSha256?: string
+	/** media handle returned by the upload server (newsletter uploads) */
+	handle?: string
 }>
 
 export type MediaGenerationOptions = {
