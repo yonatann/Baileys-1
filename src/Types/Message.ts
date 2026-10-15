@@ -322,6 +322,8 @@ export type MessageRelayOptions = MinimalRelayOptions & {
 	useUserDevicesCache?: boolean
 	/** jid list of participants for status@broadcast */
 	statusJidList?: string[]
+	/** channel media only: upload `handle`, published as the `media_id` attribute (as WA Web does) */
+	newsletterMediaHandle?: string
 }
 
 export type MiscMessageGenerationOptions = MinimalRelayOptions & {
@@ -359,6 +361,8 @@ export type WAMediaUploadFunction = (
 	fbid?: number
 	thumbnailDirectPath?: string
 	thumbnailSha256?: string
+	/** media handle returned by the upload server (newsletter uploads) */
+	handle?: string
 }>
 
 export type MediaGenerationOptions = {

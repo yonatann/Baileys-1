@@ -713,6 +713,7 @@ type MediaUploadResult = {
 	meta_hmac?: string
 	ts?: number
 	fbid?: number
+	handle?: string
 	thumbnail_info?: {
 		thumbnail_sha256?: string
 		thumbnail_direct_path?: string
@@ -876,6 +877,7 @@ export const getWAUploadToServer = (
 					fbid?: number
 					thumbnailDirectPath?: string
 					thumbnailSha256?: string
+					handle?: string
 			  }
 			| undefined
 		const hosts = [...customUploadHosts, ...uploadInfo.hosts]
@@ -929,7 +931,8 @@ export const getWAUploadToServer = (
 						fbid: result.fbid,
 						ts: result.ts,
 						thumbnailDirectPath: result.thumbnail_info?.thumbnail_direct_path,
-						thumbnailSha256: result.thumbnail_info?.thumbnail_sha256
+						thumbnailSha256: result.thumbnail_info?.thumbnail_sha256,
+						handle: result.handle
 					}
 					break
 				} else {
