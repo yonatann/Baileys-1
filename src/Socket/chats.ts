@@ -56,6 +56,7 @@ import { clampAbPropsRefreshSec, dispatchAccountSyncDirtyProtocols, planInitQuer
 import { makeMutex } from '../Utils/make-mutex'
 import processMessage from '../Utils/process-message'
 import { buildTcTokenFromJid } from '../Utils/tc-token-utils'
+import { applyUsernameContactDisplayProp, USERNAME_CONTACT_DISPLAY_DEFAULT } from '../Utils/username-display-prop'
 import {
 	type BinaryNode,
 	getAllBinaryNodeChildren,
@@ -108,7 +109,9 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		/** AB prop 9666: gate tctoken on profile picture IQs. WA Web default: true. */
 		profilePicPrivacyToken: true,
 		/** AB prop 14303: issue tctokens to LID instead of PN. WA Web default: false. */
-		lidTrustedTokenIssueToLid: false
+		lidTrustedTokenIssueToLid: false,
+		/** AB prop 4746 (username_contact_display): WA Web usernameDisplayedEnabled() prop term. WA default: true. */
+		usernameContactDisplayProp: USERNAME_CONTACT_DISPLAY_DEFAULT
 	}
 	// WA Web parity (B7): restore the last-known server props so skipping the open-time AB-props IQ (or a
 	// delta response that omits unchanged props) does not silently fall back to the defaults above.
@@ -1123,6 +1126,11 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		if (lidIssueProp !== undefined) {
 			serverProps.lidTrustedTokenIssueToLid = lidIssueProp === 'true' || lidIssueProp === '1'
 		}
+
+		serverProps.usernameContactDisplayProp = applyUsernameContactDisplayProp(
+			props,
+			serverProps.usernameContactDisplayProp
+		)
 
 		if (propsNode) {
 			authState.creds.abPropsServerProps = { ...serverProps }

@@ -33,6 +33,11 @@ export type PatchedMessageWithRecipientJID = proto.IMessage & { recipientJid?: s
 export type SocketConfig = {
 	/** the WS url to connect to WA */
 	waWebSocketUrl: string | URL
+	/**
+	 * WA Web parity (FR2): client-side gatekeeper inputs. Default (absent) = false (U-2: companion value of gkx 10314 unverified).
+	 * isGuest mirrors Environment.isGuest (gkx 10314); it feeds usernameDisplayedEnabled() only.
+	 */
+	gatekeepers?: { isGuest?: boolean }
 	/** Fails the connection if the socket times out in this interval */
 	connectTimeoutMs: number
 	/** Default timeout for queries, undefined for no timeout */
