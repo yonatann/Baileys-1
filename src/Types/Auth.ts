@@ -71,6 +71,13 @@ export type AuthenticationCreds = SignalCreds & {
 	 * open, and sent in the login ClientPayload as a device-continuity signal.
 	 */
 	registeredLoginCount?: number
+	/**
+	 * WA Web parity FR1: account LID migration flag from pair-success ClientPairingProps.isChatDbLidMigrated.
+	 * Only ever set to true (never false, never logout). undefined = unmigrated. Read via isAccountLidMigrated().
+	 */
+	isChatDbLidMigrated?: boolean
+	/** WA Web parity FR1: ClientPairingProps.isSyncdPureLidSession, stored alongside isChatDbLidMigrated. */
+	isSyncdPureLidSession?: boolean
 	accountSettings: AccountSettings
 	registered: boolean
 	pairingCode: string | undefined

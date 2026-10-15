@@ -11,6 +11,7 @@ import type { AuthenticationCreds, SignalCreds, SocketConfig } from '../Types'
 import { type BinaryNode, getBinaryNodeChild, jidDecode, S_WHATSAPP_NET } from '../WABinary'
 import { Curve, hmacSign } from './crypto'
 import { encodeBigEndian } from './generics'
+import { getPairingLidMigrationUpdate, parseClientPairingProps } from './lid-migration'
 import { createSignalIdentity } from './signal'
 
 const getUserAgent = (config: SocketConfig): proto.ClientPayload.IUserAgent => {
@@ -267,6 +268,11 @@ export const configureSuccessfulPairing = (
 		]
 	}
 
+	// WA Web parity FR1: pair-success client-props carry isChatDbLidMigrated. Persist only the true case;
+	// a non-true value is logged by the caller and never logs out or flips the flag (operator rule).
+	const clientPairingProps = parseClientPairingProps(stanza)
+	const lidMigrationUpdate = getPairingLidMigrationUpdate(clientPairingProps)
+
 	const authUpdate: Partial<AuthenticationCreds> = {
 		account,
 		me: { id: jid!, name: bizName, lid },
@@ -277,12 +283,14 @@ export const configureSuccessfulPairing = (
 		// reconnect instead of re-registering an already-linked device (which loops back to QR).
 		// Symmetric with the link-code path, which sets `creds.registered = true` at companion_finish
 		// (Socket/messages-recv). Without this, the registration-gate fix broke QR pairing entirely.
-		registered: true
+		registered: true,
+		...lidMigrationUpdate
 	}
 
 	return {
 		creds: authUpdate,
-		reply
+		reply,
+		clientPairingProps
 	}
 }
 
