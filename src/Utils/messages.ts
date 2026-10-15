@@ -395,6 +395,31 @@ function hasOptionalProperty<T, K extends PropertyKey>(obj: T, key: K): obj is W
 	return typeof obj === 'object' && obj !== null && key in obj && (obj as any)[key] !== null
 }
 
+/**
+ * WA Web sends a plain text message (no link preview, quote, mention, formatting or other
+ * context) as `conversation`, and only uses `extendedTextMessage` when one of those fields is
+ * present. Rewrites a bare `{ extendedTextMessage: { text } }` to `{ conversation: text }`,
+ * leaving every other top-level key (e.g. `messageContextInfo`) untouched.
+ */
+export const toConversationIfPlainText = (message: proto.IMessage): proto.IMessage => {
+	const ext = message.extendedTextMessage
+	if (!ext || typeof ext.text !== 'string') {
+		return message
+	}
+
+	const setFields = Object.keys(ext).filter(k => {
+		const value = (ext as Record<string, unknown>)[k]
+		return value !== undefined && value !== null
+	})
+	if (setFields.length !== 1) {
+		return message
+	}
+
+	const rest: proto.IMessage = { ...message }
+	delete rest.extendedTextMessage
+	return { ...rest, conversation: ext.text }
+}
+
 export const generateWAMessageContent = async (
 	message: AnyMessageContent,
 	options: MessageContentGenerationOptions
@@ -756,7 +781,7 @@ export const generateWAMessageFromContent = (
 		}
 	}
 
-	message = WAProto.Message.create(message)
+	message = WAProto.Message.create(toConversationIfPlainText(message))
 
 	const messageJSON = {
 		key: {
