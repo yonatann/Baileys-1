@@ -128,6 +128,12 @@ type ViewOnce = {
 
 type Editable = {
 	edit?: WAMessageKey
+	/**
+	 * messageSecret of the message being edited. When given, the edit is sent
+	 * the way WA Web sends it: encrypted as a secretEncryptedMessage
+	 * (MESSAGE_EDIT) instead of a plain protocolMessage.
+	 */
+	editMessageSecret?: Uint8Array
 }
 type WithDimensions = {
 	width?: number
@@ -322,6 +328,8 @@ export type MessageRelayOptions = MinimalRelayOptions & {
 	useUserDevicesCache?: boolean
 	/** jid list of participants for status@broadcast */
 	statusJidList?: string[]
+	/** compute the <reporting> token over this proto instead of the relayed one (encrypted edits) */
+	reportingMessage?: proto.IMessage
 	/** channel media only: upload `handle`, published as the `media_id` attribute (as WA Web does) */
 	newsletterMediaHandle?: string
 }

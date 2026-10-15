@@ -46,10 +46,12 @@ import {
 	makeBindingOnlyParticipantNodes,
 	makeContentBindings
 } from '../Utils/content-binding'
+import { shouldHideDecryptFail } from '../Utils/decrypt-fail'
 import { getUrlInfo } from '../Utils/link-preview'
 import { makeKeyedMutex, makeMutex } from '../Utils/make-mutex'
+import { encryptMessageEdit } from '../Utils/message-edit-secret'
 import { buildNewsletterMessageNode, captureUploadHandle } from '../Utils/newsletter-stanza'
-import { getMessageReportingToken, shouldIncludeReportingToken } from '../Utils/reporting-utils'
+import { getMessageReportingToken, isRevokeMessage, shouldIncludeReportingToken } from '../Utils/reporting-utils'
 import {
 	buildMergedTcTokenIndexWrite,
 	isTcTokenExpired,
@@ -675,6 +677,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			useUserDevicesCache,
 			useCachedGroupMetadata,
 			statusJidList,
+			reportingMessage: reportingMessageOverride,
 			newsletterMediaHandle
 		}: MessageRelayOptions
 	) => {
@@ -751,8 +754,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				return
 			}
 
-			if (normalizeMessageContent(message)?.pinInChatMessage || normalizeMessageContent(message)?.reactionMessage) {
-				extraAttrs['decrypt-fail'] = 'hide' // todo: expand for reactions and other types
+			if (shouldHideDecryptFail(message)) {
+				extraAttrs['decrypt-fail'] = 'hide'
 			}
 
 			if (isGroupOrStatus && !isRetryResend) {
@@ -1149,11 +1152,16 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				;(stanza.content as BinaryNode[]).push(senderContentBindingNode)
 			}
 
+			if (reportingMessageOverride) {
+				reportingMessage = reportingMessageOverride
+			}
+
 			if (
 				!isNewsletter &&
 				!isRetryResend &&
 				reportingMessage?.messageContextInfo?.messageSecret &&
-				shouldIncludeReportingToken(reportingMessage)
+				shouldIncludeReportingToken(reportingMessage) &&
+				!isRevokeMessage(reportingMessage)
 			) {
 				try {
 					const encoded = encodeWAMessage(reportingMessage)
@@ -1524,12 +1532,29 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					} as BinaryNode)
 				}
 
-				await relayMessage(jid, fullMsg.message!, {
+				// WA Web sends edits secret-encrypted with the edited message's messageSecret
+				let relayContent = fullMsg.message!
+				let reportingMessage: proto.IMessage | undefined
+				const editMessageSecret = isEditMsg && 'editMessageSecret' in content ? content.editMessageSecret : undefined
+				const plainEdit = fullMsg.message?.protocolMessage
+				if (editMessageSecret && plainEdit) {
+					const self = authState.creds.me!.lid || authState.creds.me!.id
+					relayContent = encryptMessageEdit(plainEdit, {
+						messageSecret: editMessageSecret,
+						originalSenderJid: self,
+						editSenderJid: self
+					})
+					// WA Web computes the reporting token over the decrypted edit
+					reportingMessage = { protocolMessage: plainEdit, messageContextInfo: { messageSecret: editMessageSecret } }
+				}
+
+				await relayMessage(jid, relayContent, {
 					messageId: fullMsg.key.id!,
 					useCachedGroupMetadata: options.useCachedGroupMetadata,
 					additionalAttributes,
 					statusJidList: options.statusJidList,
 					additionalNodes,
+					reportingMessage,
 					newsletterMediaHandle: newsletterUpload?.getHandle()
 				})
 				if (config.emitOwnEvents) {
