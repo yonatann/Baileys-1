@@ -1939,6 +1939,13 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	const handleBadAck = async ({ attrs }: BinaryNode) => {
 		const key: WAMessageKey = { remoteJid: attrs.from, fromMe: true, id: attrs.id }
 
+		if (attrs.phash) {
+			logger.warn(
+				{ msgId: attrs.id, from: attrs.from, phash: attrs.phash },
+				'server participant hash differs from the one sent; some devices may have been missed'
+			)
+		}
+
 		// WARNING: REFRAIN FROM ENABLING THIS FOR NOW. IT WILL CAUSE A LOOP
 		// // current hypothesis is that if pash is sent in the ack
 		// // it means -- the message hasn't reached all devices yet

@@ -72,11 +72,29 @@ export const unpadRandomMax16 = (e: Uint8Array | Buffer) => {
 	return new Uint8Array(t.buffer, t.byteOffset, t.length - r)
 }
 
-// code is inspired by whatsmeow
+/**
+ * Device JID as WA Web feeds it to the participant hash:
+ * `Wid.toString({ legacy: true, formatFull: true })` always writes the agent (`.0`) and the
+ * device (`:0` included), and maps `c.us` to `s.whatsapp.net`.
+ */
+export const toParticipantHashJid = (jid: string): string => {
+	const decoded = jidDecode(jid)
+	if (!decoded) {
+		throw new Boom(`Invalid jid for participant hash: ${jid}`, { statusCode: 400 })
+	}
+
+	const server = decoded.server === 'c.us' ? 's.whatsapp.net' : decoded.server
+	return `${decoded.user}.0:${decoded.device || 0}@${server}`
+}
+
+/**
+ * WA Web `WAWebPhashUtils.phashV2`: SHA-256 over the sorted, concatenated device JIDs,
+ * base64 of the first 6 digest bytes (8 chars), prefixed with `2:`.
+ */
 export const generateParticipantHashV2 = (participants: string[]): string => {
-	participants.sort()
-	const sha256Hash = sha256(Buffer.from(participants.join(''))).toString('base64')
-	return '2:' + sha256Hash.slice(0, 6)
+	const formatted = [...new Set(participants.map(toParticipantHashJid))].sort()
+	const digest = sha256(Buffer.from(formatted.join('')))
+	return '2:' + digest.subarray(0, 6).toString('base64')
 }
 
 export const encodeWAMessage = (message: proto.IMessage) => writeRandomPadMax16(proto.Message.encode(message).finish())
