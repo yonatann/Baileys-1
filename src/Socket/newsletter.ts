@@ -3,7 +3,7 @@ import type { NewsletterMetadata, NewsletterUpdate } from '../Types'
 import { QueryIds, XWAPaths } from '../Types'
 import { generateMessageIDV2 } from '../Utils/generics'
 import { generateProfilePicture } from '../Utils/messages-media'
-import { getBinaryNodeChild } from '../WABinary'
+import { type BinaryNode, getBinaryNodeChild } from '../WABinary'
 import { makeGroupsSocket } from './groups'
 import { executeWMexQuery as genericExecuteWMexQuery } from './mex'
 
@@ -45,6 +45,56 @@ const parseNewsletterMetadata = (result: unknown): NewsletterMetadata | null => 
 	}
 
 	return null
+}
+
+/**
+ * Channel history request: `<iq to=s.whatsapp.net xmlns=newsletter type=get><messages type=jid jid=.. count=..[ since=..][ after=..]/></iq>`.
+ * Verified live 2026-10-15; WA Web's own request mixin is `<messages count=..>` under the channel jid.
+ */
+export const buildNewsletterFetchMessagesNode = (
+	id: string,
+	jid: string,
+	count: number,
+	since?: number,
+	after?: number
+): BinaryNode => {
+	const attrs: BinaryNode['attrs'] = { type: 'jid', jid, count: count.toString() }
+	if (typeof since === 'number') {
+		attrs.since = since.toString()
+	}
+
+	if (after) {
+		attrs.after = after.toString()
+	}
+
+	return {
+		tag: 'iq',
+		attrs: { id, type: 'get', xmlns: 'newsletter', to: 's.whatsapp.net' },
+		content: [{ tag: 'messages', attrs }]
+	}
+}
+
+export const buildNewsletterFetchMessageUpdatesNode = (
+	id: string,
+	jid: string,
+	count: number,
+	since?: number,
+	after?: number
+): BinaryNode => {
+	const attrs: BinaryNode['attrs'] = { count: count.toString() }
+	if (typeof since === 'number') {
+		attrs.since = since.toString()
+	}
+
+	if (after) {
+		attrs.after = after.toString()
+	}
+
+	return {
+		tag: 'iq',
+		attrs: { id, type: 'get', xmlns: 'newsletter', to: jid },
+		content: [{ tag: 'message_updates', attrs }]
+	}
 }
 
 export const makeNewsletterSocket = (config: SocketConfig) => {
@@ -160,35 +210,16 @@ export const makeNewsletterSocket = (config: SocketConfig) => {
 			})
 		},
 
-		newsletterFetchMessages: async (jid: string, count: number, since: number, after: number) => {
-			const messageUpdateAttrs: { count: string; since?: string; after?: string } = {
-				count: count.toString()
-			}
-			if (typeof since === 'number') {
-				messageUpdateAttrs.since = since.toString()
-			}
+		/**
+		 * Channel history (see `buildNewsletterFetchMessagesNode`: the old `<message_updates>`
+		 * shape addressed to the channel jid is never answered, 60s timeout).
+		 */
+		newsletterFetchMessages: async (jid: string, count: number, since?: number, after?: number) =>
+			query(buildNewsletterFetchMessagesNode(generateMessageTag(), jid, count, since, after)),
 
-			if (after) {
-				messageUpdateAttrs.after = after.toString()
-			}
-
-			const result = await query({
-				tag: 'iq',
-				attrs: {
-					id: generateMessageTag(),
-					type: 'get',
-					xmlns: 'newsletter',
-					to: jid
-				},
-				content: [
-					{
-						tag: 'message_updates',
-						attrs: messageUpdateAttrs
-					}
-				]
-			})
-			return result
-		},
+		/** Per-message updates (reaction counts, views) for a channel: the old `<message_updates>` shape, kept as-is. */
+		newsletterFetchMessageUpdates: async (jid: string, count: number, since?: number, after?: number) =>
+			query(buildNewsletterFetchMessageUpdatesNode(generateMessageTag(), jid, count, since, after)),
 
 		subscribeNewsletterUpdates: async (jid: string): Promise<{ duration: string } | null> => {
 			const result = await query({
