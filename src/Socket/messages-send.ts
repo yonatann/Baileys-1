@@ -804,6 +804,15 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				const groupAddressingMode = additionalAttributes?.['addressing_mode'] || groupData?.addressingMode || 'pn'
 				const groupSenderIdentity = groupAddressingMode === 'lid' && meLid ? meLid : meId
 
+				// WA Web hashes every device it fans out to plus the sending device itself; the server
+				// compares it to its own view and answers a mismatch with a phash on the <ack>.
+				if (isGroup) {
+					additionalAttributes = {
+						...additionalAttributes,
+						phash: generateParticipantHashV2([...devices.map(d => d.jid), groupSenderIdentity])
+					}
+				}
+
 				const { ciphertext, senderKeyDistributionMessage } = await signalRepository.encryptGroupMessage({
 					group: destinationJid,
 					data: bytes,
@@ -967,10 +976,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				])
 				participants.push(...meNodes)
 				participants.push(...otherNodes)
-
-				if (meRecipients.length > 0 || otherRecipients.length > 0) {
-					extraAttrs['phash'] = generateParticipantHashV2([...meRecipients, ...otherRecipients])
-				}
 
 				shouldIncludeDeviceIdentity = shouldIncludeDeviceIdentity || s1 || s2
 			}
