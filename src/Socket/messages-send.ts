@@ -35,6 +35,7 @@ import {
 	MessageRetryManager,
 	normalizeMessageContent,
 	parseAndInjectE2ESessions,
+	resolvePeerRecipientPn,
 	selectLidsForForceRefetch,
 	unixTimestampSeconds
 } from '../Utils'
@@ -880,6 +881,21 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				}
 
 				const { user: ownUser } = jidDecode(ownId)!
+				if (
+					!isRetryResend &&
+					additionalAttributes?.['category'] !== 'peer' &&
+					!additionalAttributes?.['peer_recipient_pn']
+				) {
+					const peerRecipientPn = await resolvePeerRecipientPn(
+						jid,
+						meLid,
+						signalRepository.lidMapping.getPNForLID.bind(signalRepository.lidMapping)
+					)
+					if (peerRecipientPn) {
+						additionalAttributes = { ...additionalAttributes, peer_recipient_pn: peerRecipientPn }
+					}
+				}
+
 				if (!participant) {
 					const patchedForReporting = await patchMessageBeforeSending(message, [jid])
 					reportingMessage = Array.isArray(patchedForReporting)
