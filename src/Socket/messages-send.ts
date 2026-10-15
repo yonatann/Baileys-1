@@ -49,6 +49,7 @@ import {
 import { shouldHideDecryptFail } from '../Utils/decrypt-fail'
 import { getUrlInfo } from '../Utils/link-preview'
 import { makeKeyedMutex, makeMutex } from '../Utils/make-mutex'
+import { encryptMessageEdit } from '../Utils/message-edit-secret'
 import { buildNewsletterMessageNode } from '../Utils/newsletter-stanza'
 import { getMessageReportingToken, isRevokeMessage, shouldIncludeReportingToken } from '../Utils/reporting-utils'
 import {
@@ -674,7 +675,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			additionalNodes,
 			useUserDevicesCache,
 			useCachedGroupMetadata,
-			statusJidList
+			statusJidList,
+			reportingMessage: reportingMessageOverride
 		}: MessageRelayOptions
 	) => {
 		const meId = assertMeId(authState.creds)
@@ -1147,6 +1149,10 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				;(stanza.content as BinaryNode[]).push(senderContentBindingNode)
 			}
 
+			if (reportingMessageOverride) {
+				reportingMessage = reportingMessageOverride
+			}
+
 			if (
 				!isNewsletter &&
 				!isRetryResend &&
@@ -1521,12 +1527,29 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					} as BinaryNode)
 				}
 
-				await relayMessage(jid, fullMsg.message!, {
+				// WA Web sends edits secret-encrypted with the edited message's messageSecret
+				let relayContent = fullMsg.message!
+				let reportingMessage: proto.IMessage | undefined
+				const editMessageSecret = isEditMsg && 'editMessageSecret' in content ? content.editMessageSecret : undefined
+				const plainEdit = fullMsg.message?.protocolMessage
+				if (editMessageSecret && plainEdit) {
+					const self = authState.creds.me!.lid || authState.creds.me!.id
+					relayContent = encryptMessageEdit(plainEdit, {
+						messageSecret: editMessageSecret,
+						originalSenderJid: self,
+						editSenderJid: self
+					})
+					// WA Web computes the reporting token over the decrypted edit
+					reportingMessage = { protocolMessage: plainEdit, messageContextInfo: { messageSecret: editMessageSecret } }
+				}
+
+				await relayMessage(jid, relayContent, {
 					messageId: fullMsg.key.id!,
 					useCachedGroupMetadata: options.useCachedGroupMetadata,
 					additionalAttributes,
 					statusJidList: options.statusJidList,
-					additionalNodes
+					additionalNodes,
+					reportingMessage
 				})
 				if (config.emitOwnEvents) {
 					process.nextTick(async () => {
