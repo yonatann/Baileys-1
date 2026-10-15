@@ -38,6 +38,14 @@ import {
 	selectLidsForForceRefetch,
 	unixTimestampSeconds
 } from '../Utils'
+import {
+	appendContentBindings,
+	type ContentBindings,
+	getContentBindingSource,
+	isLinkMessage,
+	makeBindingOnlyParticipantNodes,
+	makeContentBindings
+} from '../Utils/content-binding'
 import { getUrlInfo } from '../Utils/link-preview'
 import { makeKeyedMutex, makeMutex } from '../Utils/make-mutex'
 import { getMessageReportingToken, shouldIncludeReportingToken } from '../Utils/reporting-utils'
@@ -700,6 +708,10 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		}
 
 		const extraAttrs: BinaryNodeAttributes = {}
+		// WA Web content binding (rcat) for link messages, see Utils/content-binding
+		const contentBindingSource =
+			!isNewsletter && !isStatus && !isRetryResend ? getContentBindingSource(message) : undefined
+		let contentBindings: ContentBindings | undefined
 
 		if (participant) {
 			if (!isGroup && !isStatus) {
@@ -803,6 +815,14 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				reportingMessage = patched
 				const groupAddressingMode = additionalAttributes?.['addressing_mode'] || groupData?.addressingMode || 'pn'
 				const groupSenderIdentity = groupAddressingMode === 'lid' && meLid ? meLid : meId
+				if (contentBindingSource) {
+					contentBindings = makeContentBindings({
+						source: contentBindingSource,
+						stanzaId: msgId,
+						senderJid: groupSenderIdentity,
+						recipientCount: groupData?.participants?.length ?? 0
+					})
+				}
 
 				const { ciphertext, senderKeyDistributionMessage } = await signalRepository.encryptGroupMessage({
 					group: destinationJid,
@@ -857,8 +877,17 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					if (reachableRecipients.length) {
 						const result = await createParticipantNodes(reachableRecipients, senderKeyMsg, extraAttrs)
 						shouldIncludeDeviceIdentity = shouldIncludeDeviceIdentity || result.shouldIncludeDeviceIdentity
+						if (contentBindings) {
+							appendContentBindings(result.nodes, contentBindings, deviceJid => deviceJid)
+						}
+
 						participants.push(...result.nodes)
 					}
+				} else if (contentBindings) {
+					const keyHolders = devices
+						.filter(({ jid, device }) => !isHostedLidUser(jid) && !isHostedPnUser(jid) && device !== 99)
+						.map(({ jid }) => jid)
+					participants.push(...makeBindingOnlyParticipantNodes(keyHolders, contentBindings))
 				}
 
 				binaryNodeContent.push({
@@ -965,6 +994,19 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					createParticipantNodes(meRecipients, meMsg || message, extraAttrs),
 					createParticipantNodes(otherRecipients, message, extraAttrs, meMsg)
 				])
+				if (contentBindingSource) {
+					const recipientUsers = new Set([ownUser, ...devices.map(d => d.user)])
+					contentBindings = makeContentBindings({
+						source: contentBindingSource,
+						stanzaId: msgId,
+						senderJid: ownId,
+						recipientCount: recipientUsers.size
+					})
+					if (contentBindings) {
+						appendContentBindings([...meNodes, ...otherNodes], contentBindings, () => destinationJid)
+					}
+				}
+
 				participants.push(...meNodes)
 				participants.push(...otherNodes)
 
@@ -1084,6 +1126,11 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				})
 
 				logger.debug({ jid }, 'adding device identity')
+			}
+
+			const senderContentBindingNode = contentBindings?.senderNode()
+			if (senderContentBindingNode) {
+				;(stanza.content as BinaryNode[]).push(senderContentBindingNode)
 			}
 
 			if (
@@ -1265,6 +1312,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		} else if (message.interactiveResponseMessage) {
 			return 'native_flow_response'
 		} else if (message.groupInviteMessage) {
+			return 'url'
+		} else if (isLinkMessage(message)) {
 			return 'url'
 		}
 
