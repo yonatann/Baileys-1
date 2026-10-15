@@ -46,11 +46,12 @@ import {
 	makeBindingOnlyParticipantNodes,
 	makeContentBindings
 } from '../Utils/content-binding'
+import { shouldHideDecryptFail } from '../Utils/decrypt-fail'
 import { getUrlInfo } from '../Utils/link-preview'
 import { makeKeyedMutex, makeMutex } from '../Utils/make-mutex'
 import { encryptMessageEdit } from '../Utils/message-edit-secret'
 import { buildNewsletterMessageNode } from '../Utils/newsletter-stanza'
-import { getMessageReportingToken, shouldIncludeReportingToken } from '../Utils/reporting-utils'
+import { getMessageReportingToken, isRevokeMessage, shouldIncludeReportingToken } from '../Utils/reporting-utils'
 import {
 	buildMergedTcTokenIndexWrite,
 	isTcTokenExpired,
@@ -750,8 +751,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				return
 			}
 
-			if (normalizeMessageContent(message)?.pinInChatMessage || normalizeMessageContent(message)?.reactionMessage) {
-				extraAttrs['decrypt-fail'] = 'hide' // todo: expand for reactions and other types
+			if (shouldHideDecryptFail(message)) {
+				extraAttrs['decrypt-fail'] = 'hide'
 			}
 
 			if (isGroupOrStatus && !isRetryResend) {
@@ -1156,7 +1157,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				!isNewsletter &&
 				!isRetryResend &&
 				reportingMessage?.messageContextInfo?.messageSecret &&
-				shouldIncludeReportingToken(reportingMessage)
+				shouldIncludeReportingToken(reportingMessage) &&
+				!isRevokeMessage(reportingMessage)
 			) {
 				try {
 					const encoded = encodeWAMessage(reportingMessage)
