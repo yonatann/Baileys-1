@@ -35,6 +35,7 @@ import {
 	MessageRetryManager,
 	normalizeMessageContent,
 	parseAndInjectE2ESessions,
+	resolvePeerRecipientPn,
 	selectLidsForForceRefetch,
 	unixTimestampSeconds
 } from '../Utils'
@@ -824,6 +825,15 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					})
 				}
 
+				// WA Web hashes every device it fans out to plus the sending device itself; the server
+				// compares it to its own view and answers a mismatch with a phash on the <ack>.
+				if (isGroup) {
+					additionalAttributes = {
+						...additionalAttributes,
+						phash: generateParticipantHashV2([...devices.map(d => d.jid), groupSenderIdentity])
+					}
+				}
+
 				const { ciphertext, senderKeyDistributionMessage } = await signalRepository.encryptGroupMessage({
 					group: destinationJid,
 					data: bytes,
@@ -909,6 +919,21 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				}
 
 				const { user: ownUser } = jidDecode(ownId)!
+				if (
+					!isRetryResend &&
+					additionalAttributes?.['category'] !== 'peer' &&
+					!additionalAttributes?.['peer_recipient_pn']
+				) {
+					const peerRecipientPn = await resolvePeerRecipientPn(
+						jid,
+						meLid,
+						signalRepository.lidMapping.getPNForLID.bind(signalRepository.lidMapping)
+					)
+					if (peerRecipientPn) {
+						additionalAttributes = { ...additionalAttributes, peer_recipient_pn: peerRecipientPn }
+					}
+				}
+
 				if (!participant) {
 					const patchedForReporting = await patchMessageBeforeSending(message, [jid])
 					reportingMessage = Array.isArray(patchedForReporting)
@@ -1009,10 +1034,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 				participants.push(...meNodes)
 				participants.push(...otherNodes)
-
-				if (meRecipients.length > 0 || otherRecipients.length > 0) {
-					extraAttrs['phash'] = generateParticipantHashV2([...meRecipients, ...otherRecipients])
-				}
 
 				shouldIncludeDeviceIdentity = shouldIncludeDeviceIdentity || s1 || s2
 			}
