@@ -20,7 +20,6 @@ import {
 	decryptMediaRetryData,
 	DEF_MEDIA_HOST,
 	DEFAULT_LID_REFETCH_THROTTLE_SEC,
-	encodeNewsletterMessage,
 	encodeSignedDeviceIdentity,
 	encodeWAMessage,
 	encryptMediaRetryRequest,
@@ -49,6 +48,7 @@ import {
 } from '../Utils/content-binding'
 import { getUrlInfo } from '../Utils/link-preview'
 import { makeKeyedMutex, makeMutex } from '../Utils/make-mutex'
+import { buildNewsletterMessageNode } from '../Utils/newsletter-stanza'
 import { getMessageReportingToken, shouldIncludeReportingToken } from '../Utils/reporting-utils'
 import {
 	buildMergedTcTokenIndexWrite,
@@ -735,22 +735,14 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 			if (isNewsletter) {
 				const patched = patchMessageBeforeSending ? await patchMessageBeforeSending(message, []) : message
-				const bytes = encodeNewsletterMessage(patched as proto.IMessage)
-				binaryNodeContent.push({
-					tag: 'plaintext',
-					attrs: mediaType ? { mediatype: mediaType } : {},
-					content: bytes
+				const stanza = buildNewsletterMessageNode({
+					jid,
+					msgId,
+					message: patched as proto.IMessage,
+					messageType: getMessageType(message),
+					mediaType,
+					additionalAttributes
 				})
-				const stanza: BinaryNode = {
-					tag: 'message',
-					attrs: {
-						to: jid,
-						id: msgId,
-						type: getMessageType(message),
-						...(additionalAttributes || {})
-					},
-					content: binaryNodeContent
-				}
 				logger.debug({ msgId }, `sending newsletter message to ${jid}`)
 				await sendNode(stanza)
 				return
