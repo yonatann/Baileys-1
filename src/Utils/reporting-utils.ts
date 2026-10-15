@@ -102,6 +102,13 @@ export const shouldIncludeReportingToken = (message: proto.IMessage): boolean =>
 	!message.encEventResponseMessage &&
 	!message.pollUpdateMessage
 
+/**
+ * WA Web sends no `<reporting>` node with a delete-for-everyone (REVOKE), in
+ * 1:1 chats, groups and communities alike; the revoke still has a messageSecret.
+ */
+export const isRevokeMessage = (message: proto.IMessage): boolean =>
+	message.protocolMessage?.type === proto.Message.ProtocolMessage.Type.REVOKE
+
 const generateMsgSecretKey = (
 	modificationType: string,
 	origMsgId: string,
