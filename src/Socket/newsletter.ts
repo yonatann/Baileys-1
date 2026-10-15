@@ -1,6 +1,7 @@
 import type { NewsletterCreateResponse, SocketConfig, WAMediaUpload } from '../Types'
 import type { NewsletterMetadata, NewsletterUpdate } from '../Types'
 import { QueryIds, XWAPaths } from '../Types'
+import { generateMessageIDV2 } from '../Utils/generics'
 import { generateProfilePicture } from '../Utils/messages-media'
 import { getBinaryNodeChild } from '../WABinary'
 import { makeGroupsSocket } from './groups'
@@ -147,7 +148,8 @@ export const makeNewsletterSocket = (config: SocketConfig) => {
 					...(reaction ? {} : { edit: '7' }),
 					type: 'reaction',
 					server_id: serverId,
-					id: generateMessageTag()
+					// WA Web uses a message id here (3EB0...), not an iq tag
+					id: generateMessageIDV2(sock.authState.creds.me?.id)
 				},
 				content: [
 					{

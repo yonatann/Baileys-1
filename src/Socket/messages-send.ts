@@ -20,7 +20,6 @@ import {
 	decryptMediaRetryData,
 	DEF_MEDIA_HOST,
 	DEFAULT_LID_REFETCH_THROTTLE_SEC,
-	encodeNewsletterMessage,
 	encodeSignedDeviceIdentity,
 	encodeWAMessage,
 	encryptMediaRetryRequest,
@@ -39,9 +38,18 @@ import {
 	selectLidsForForceRefetch,
 	unixTimestampSeconds
 } from '../Utils'
+import {
+	appendContentBindings,
+	type ContentBindings,
+	getContentBindingSource,
+	isLinkMessage,
+	makeBindingOnlyParticipantNodes,
+	makeContentBindings
+} from '../Utils/content-binding'
 import { shouldHideDecryptFail } from '../Utils/decrypt-fail'
 import { getUrlInfo } from '../Utils/link-preview'
 import { makeKeyedMutex, makeMutex } from '../Utils/make-mutex'
+import { buildNewsletterMessageNode } from '../Utils/newsletter-stanza'
 import { getMessageReportingToken, isRevokeMessage, shouldIncludeReportingToken } from '../Utils/reporting-utils'
 import {
 	buildMergedTcTokenIndexWrite,
@@ -702,6 +710,10 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		}
 
 		const extraAttrs: BinaryNodeAttributes = {}
+		// WA Web content binding (rcat) for link messages, see Utils/content-binding
+		const contentBindingSource =
+			!isNewsletter && !isStatus && !isRetryResend ? getContentBindingSource(message) : undefined
+		let contentBindings: ContentBindings | undefined
 
 		if (participant) {
 			if (!isGroup && !isStatus) {
@@ -724,22 +736,14 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 			if (isNewsletter) {
 				const patched = patchMessageBeforeSending ? await patchMessageBeforeSending(message, []) : message
-				const bytes = encodeNewsletterMessage(patched as proto.IMessage)
-				binaryNodeContent.push({
-					tag: 'plaintext',
-					attrs: mediaType ? { mediatype: mediaType } : {},
-					content: bytes
+				const stanza = buildNewsletterMessageNode({
+					jid,
+					msgId,
+					message: patched as proto.IMessage,
+					messageType: getMessageType(message),
+					mediaType,
+					additionalAttributes
 				})
-				const stanza: BinaryNode = {
-					tag: 'message',
-					attrs: {
-						to: jid,
-						id: msgId,
-						type: getMessageType(message),
-						...(additionalAttributes || {})
-					},
-					content: binaryNodeContent
-				}
 				logger.debug({ msgId }, `sending newsletter message to ${jid}`)
 				await sendNode(stanza)
 				return
@@ -805,6 +809,14 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				reportingMessage = patched
 				const groupAddressingMode = additionalAttributes?.['addressing_mode'] || groupData?.addressingMode || 'pn'
 				const groupSenderIdentity = groupAddressingMode === 'lid' && meLid ? meLid : meId
+				if (contentBindingSource) {
+					contentBindings = makeContentBindings({
+						source: contentBindingSource,
+						stanzaId: msgId,
+						senderJid: groupSenderIdentity,
+						recipientCount: groupData?.participants?.length ?? 0
+					})
+				}
 
 				// WA Web hashes every device it fans out to plus the sending device itself; the server
 				// compares it to its own view and answers a mismatch with a phash on the <ack>.
@@ -868,8 +880,17 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					if (reachableRecipients.length) {
 						const result = await createParticipantNodes(reachableRecipients, senderKeyMsg, extraAttrs)
 						shouldIncludeDeviceIdentity = shouldIncludeDeviceIdentity || result.shouldIncludeDeviceIdentity
+						if (contentBindings) {
+							appendContentBindings(result.nodes, contentBindings, deviceJid => deviceJid)
+						}
+
 						participants.push(...result.nodes)
 					}
+				} else if (contentBindings) {
+					const keyHolders = devices
+						.filter(({ jid, device }) => !isHostedLidUser(jid) && !isHostedPnUser(jid) && device !== 99)
+						.map(({ jid }) => jid)
+					participants.push(...makeBindingOnlyParticipantNodes(keyHolders, contentBindings))
 				}
 
 				binaryNodeContent.push({
@@ -991,6 +1012,19 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					createParticipantNodes(meRecipients, meMsg || message, extraAttrs),
 					createParticipantNodes(otherRecipients, message, extraAttrs, meMsg)
 				])
+				if (contentBindingSource) {
+					const recipientUsers = new Set([ownUser, ...devices.map(d => d.user)])
+					contentBindings = makeContentBindings({
+						source: contentBindingSource,
+						stanzaId: msgId,
+						senderJid: ownId,
+						recipientCount: recipientUsers.size
+					})
+					if (contentBindings) {
+						appendContentBindings([...meNodes, ...otherNodes], contentBindings, () => destinationJid)
+					}
+				}
+
 				participants.push(...meNodes)
 				participants.push(...otherNodes)
 
@@ -1106,6 +1140,11 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				})
 
 				logger.debug({ jid }, 'adding device identity')
+			}
+
+			const senderContentBindingNode = contentBindings?.senderNode()
+			if (senderContentBindingNode) {
+				;(stanza.content as BinaryNode[]).push(senderContentBindingNode)
 			}
 
 			if (
@@ -1288,6 +1327,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		} else if (message.interactiveResponseMessage) {
 			return 'native_flow_response'
 		} else if (message.groupInviteMessage) {
+			return 'url'
+		} else if (isLinkMessage(message)) {
 			return 'url'
 		}
 
