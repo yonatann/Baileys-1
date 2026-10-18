@@ -417,4 +417,58 @@ describe('buildAckStanza', () => {
 			})
 		})
 	})
+
+	describe('call control actions', () => {
+		const callNode = (child: string): BinaryNode => ({
+			tag: 'call',
+			attrs: { id: 'call-node-1', from: '111@lid', t: '1790000000' },
+			content: [{ tag: child, attrs: { 'call-id': 'ABC', 'call-creator': '111@lid' } }]
+		})
+
+		it.each(['group_update', 'enc_rekey', 'waiting_room_update', 'user_action', 'screen_share'])(
+			'types the ack of a <call><%s> with the action tag',
+			child => {
+				expect(buildAckStanza(callNode(child))).toEqual({
+					tag: 'ack',
+					attrs: { id: 'call-node-1', to: '111@lid', class: 'call', type: child }
+				})
+			}
+		)
+
+		it.each(['offer', 'relaylatency', 'transport', 'mute_v2', 'accept', 'terminate', 'reject'])(
+			'keeps the ack of a <call><%s> typeless',
+			child => {
+				expect(buildAckStanza(callNode(child)).attrs.type).toBeUndefined()
+			}
+		)
+
+		it('keeps an explicit outer type over the action tag', () => {
+			const node = callNode('group_update')
+			node.attrs.type = 'outer'
+			expect(buildAckStanza(node).attrs.type).toBe('outer')
+		})
+
+		it('does not type a non-call node by its first child', () => {
+			const node: BinaryNode = {
+				tag: 'notification',
+				attrs: { id: 'n-1', from: 'x@s.whatsapp.net' },
+				content: [{ tag: 'group_update', attrs: {} }]
+			}
+			expect(buildAckStanza(node).attrs.type).toBeUndefined()
+		})
+
+		it('keeps participant and recipient on a typed call ack', () => {
+			const node = callNode('enc_rekey')
+			node.attrs.participant = '222@lid'
+			node.attrs.recipient = '333@lid'
+			expect(buildAckStanza(node).attrs).toEqual({
+				id: 'call-node-1',
+				to: '111@lid',
+				class: 'call',
+				type: 'enc_rekey',
+				participant: '222@lid',
+				recipient: '333@lid'
+			})
+		})
+	})
 })
