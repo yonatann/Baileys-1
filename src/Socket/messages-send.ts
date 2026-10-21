@@ -36,6 +36,7 @@ import {
 	parseAndInjectE2ESessions,
 	resolvePeerRecipientPn,
 	selectLidsForForceRefetch,
+	selectPhashFanoutJids,
 	unixTimestampSeconds
 } from '../Utils'
 import {
@@ -825,10 +826,13 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 				// WA Web hashes every device it fans out to plus the sending device itself; the server
 				// compares it to its own view and answers a mismatch with a phash on the <ack>.
+				// The fan-out list (`WAWebDBDeviceListFanout.getFanOutList`) never contains device 99 or
+				// hosted devices, so neither does the hash — `getUSyncDevices` returns them, filter here
+				// (the sender-key fan-out below already skips them; the hash must cover the same set).
 				if (isGroup) {
 					additionalAttributes = {
 						...additionalAttributes,
-						phash: generateParticipantHashV2([...devices.map(d => d.jid), groupSenderIdentity])
+						phash: generateParticipantHashV2([...selectPhashFanoutJids(devices, meId, meLid), groupSenderIdentity])
 					}
 				}
 
