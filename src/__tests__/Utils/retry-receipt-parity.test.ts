@@ -3,14 +3,15 @@ import {
 	decideRetryBaseKeyAction,
 	decideRetryKeyBundle,
 	forgetSenderKeyEntry,
+	isPrimaryDeviceJid,
 	parseRetryReceiptCount,
 	refuseRetryReceipt,
 	requesterHasDevice,
 	RETRY_RECEIPT_MAX_RETRY,
-	runRetryReceipt,
-	shouldDeleteSessionOnRegMismatch,
 	type RetryReceiptDeps,
-	type RetryReceiptInput
+	type RetryReceiptInput,
+	runRetryReceipt,
+	shouldDeleteSessionOnRegMismatch
 } from '../../Utils/retry-receipt-parity'
 
 const GROUP = '120363000000000001@g.us'
@@ -126,7 +127,11 @@ describe('forgetSenderKeyEntry', () => {
 
 	it('skips the current device, and flags rotateKey for an unknown PN device only', () => {
 		expect(forgetSenderKeyEntry(map, ME, true)).toEqual({ map, changed: false, rotateKey: false })
-		expect(forgetSenderKeyEntry(map, '15550000003@s.whatsapp.net', false)).toEqual({ map, changed: false, rotateKey: true })
+		expect(forgetSenderKeyEntry(map, '15550000003@s.whatsapp.net', false)).toEqual({
+			map,
+			changed: false,
+			rotateKey: true
+		})
 		expect(forgetSenderKeyEntry(map, '900000000000003@lid', false)).toEqual({ map, changed: false, rotateKey: false })
 	})
 })
@@ -171,6 +176,18 @@ describe('decideRetryBaseKeyAction', () => {
 	})
 })
 
+// S3 — `WAWebSendMsgCommonApi.isPrimaryDevice`: device null or 0
+describe('isPrimaryDeviceJid', () => {
+	it('device 0 / no device is primary, companions are not', () => {
+		expect(isPrimaryDeviceJid('15550000001@s.whatsapp.net')).toBe(true)
+		expect(isPrimaryDeviceJid('15550000001:0@s.whatsapp.net')).toBe(true)
+		expect(isPrimaryDeviceJid('900000000000001@lid')).toBe(true)
+		expect(isPrimaryDeviceJid('15550000001:3@s.whatsapp.net')).toBe(false)
+		expect(isPrimaryDeviceJid('900000000000001:12@lid')).toBe(false)
+		expect(isPrimaryDeviceJid('not a jid')).toBe(false)
+	})
+})
+
 describe('runRetryReceipt (WA Web order)', () => {
 	// regression for #301 finding (2): a declined retry must leave memory and sessions untouched
 	it('count >= MAX_RETRY: refuses with zero mutation', async () => {
@@ -200,6 +217,37 @@ describe('runRetryReceipt (WA Web order)', () => {
 		await runRetryReceipt(deps, input({ requester: COMPANION }))
 		expect(deps.memory()).toEqual({ [PRIMARY]: true, [COMPANION]: false, [OTHER]: true })
 		expect(deps.setSenderKeyMemory).toHaveBeenCalledTimes(1)
+	})
+
+	// W14 — the forget runs under the send path's lock so a concurrent send cannot lose it
+	it('group forget runs inside withSenderKeyMemoryLock when provided', async () => {
+		const order: string[] = []
+		const deps = makeDeps({
+			withSenderKeyMemoryLock: jest.fn(async (_g: string, fn: () => Promise<any>) => {
+				order.push('lock:enter')
+				const r = await fn()
+				order.push('lock:exit')
+				return r
+			}) as any
+		})
+		;(deps.getSenderKeyMemory as jest.Mock).mockImplementation(async () => {
+			order.push('get')
+			return deps.memory()
+		})
+		;(deps.setSenderKeyMemory as jest.Mock).mockImplementation(async () => {
+			order.push('set')
+		})
+		await runRetryReceipt(deps, input({ requester: COMPANION }))
+		expect(order).toEqual(['lock:enter', 'get', 'set', 'lock:exit'])
+		expect(deps.withSenderKeyMemoryLock).toHaveBeenCalledWith(GROUP, expect.any(Function))
+	})
+
+	it('1:1 retry does not take the sender-key memory lock', async () => {
+		const deps = makeDeps({
+			withSenderKeyMemoryLock: jest.fn(async (_g: string, fn: () => Promise<any>) => fn()) as any
+		})
+		await runRetryReceipt(deps, input({ remoteJid: PRIMARY }))
+		expect(deps.withSenderKeyMemoryLock).not.toHaveBeenCalled()
 	})
 
 	it('1:1 retry does not touch sender-key memory', async () => {
@@ -259,7 +307,9 @@ describe('runRetryReceipt (WA Web order)', () => {
 		expect(save.baseKey!.save).toHaveBeenCalledWith(PRIMARY, 'MSG1')
 		expect(save.deleteSession).not.toHaveBeenCalled()
 
-		const del = makeDeps({ baseKey: { save: jest.fn(() => {}), hasSame: jest.fn(() => true), delete: jest.fn(() => {}) } })
+		const del = makeDeps({
+			baseKey: { save: jest.fn(() => {}), hasSame: jest.fn(() => true), delete: jest.fn(() => {}) }
+		})
 		await runRetryReceipt(del, input({ retryCount: 3 }))
 		expect(del.deleteSession).toHaveBeenCalledWith(PRIMARY)
 		expect(del.baseKey!.delete).toHaveBeenCalledWith(PRIMARY, 'MSG1')

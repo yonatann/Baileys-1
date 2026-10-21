@@ -26,6 +26,16 @@ export const parseRetryReceiptCount = (count: string | undefined): number => {
 	return Number.isFinite(n) ? n : 0
 }
 
+/**
+ * `WAWebSendMsgCommonApi.isPrimaryDevice(wid)`: `wid.device == null || wid.device === DEFAULT_DEVICE_ID (0)`.
+ * `WAWebGetGroupKeyDistributionMsg` drops a companion whose SKDM encryption fails but rejects the
+ * send when a primary device fails.
+ */
+export const isPrimaryDeviceJid = (jid: string): boolean => {
+	const decoded = jidDecode(jid)
+	return !!decoded && !decoded.device
+}
+
 export type RetryReceiptRefusal = 'retry_count_exceeded' | 'no_requester' | 'unknown_device' | 'missing_registration'
 
 /**
@@ -140,6 +150,12 @@ export type RetryReceiptDeps = {
 	listDevices: (user: string) => Promise<number[] | null>
 	getSenderKeyMemory: (group: string) => Promise<Record<string, boolean>>
 	setSenderKeyMemory: (group: string, map: Record<string, boolean>) => Promise<unknown> | void
+	/**
+	 * WA Web runs the receipt and the send jobs of one chat serially, so `markForgetSenderKey` never
+	 * interleaves with a send's read-modify-write of the same participant record. The socket runs the
+	 * forget inside the same keys transaction the send path holds; absent → run unguarded.
+	 */
+	withSenderKeyMemoryLock?: <T>(group: string, fn: () => Promise<T>) => Promise<T>
 	isMeDevice: (jid: string) => boolean
 	isMeAccount: (jid: string) => boolean
 	getLocalRegId: (jid: string) => Promise<number | null>
@@ -168,7 +184,10 @@ export type RetryReceiptOutcome =
  * bundle → reg-mismatch delete → base-key rule → non-forced session ensure → message lookup →
  * resend to the requester device only.
  */
-export const runRetryReceipt = async (deps: RetryReceiptDeps, input: RetryReceiptInput): Promise<RetryReceiptOutcome> => {
+export const runRetryReceipt = async (
+	deps: RetryReceiptDeps,
+	input: RetryReceiptInput
+): Promise<RetryReceiptOutcome> => {
 	const { logger } = deps
 	const { remoteJid, requester, retryCount, offline, receivedRegId, bundle, ids } = input
 
@@ -183,11 +202,19 @@ export const runRetryReceipt = async (deps: RetryReceiptDeps, input: RetryReceip
 	const regId = receivedRegId!
 
 	if (isJidGroup(remoteJid)) {
-		const current = await deps.getSenderKeyMemory(remoteJid)
-		const { map, changed, rotateKey } = forgetSenderKeyEntry(current, jid, deps.isMeDevice(jid))
-		if (changed) {
-			await deps.setSenderKeyMemory(remoteJid, map)
+		const forget = async () => {
+			const current = await deps.getSenderKeyMemory(remoteJid)
+			const result = forgetSenderKeyEntry(current, jid, deps.isMeDevice(jid))
+			if (result.changed) {
+				await deps.setSenderKeyMemory(remoteJid, result.map)
+			}
+
+			return result
 		}
+
+		const { rotateKey } = deps.withSenderKeyMemoryLock
+			? await deps.withSenderKeyMemoryLock(remoteJid, forget)
+			: await forget()
 
 		if (rotateKey) {
 			// WA Web flags the group for a sender-key rotation here; the fork has no rotateKey

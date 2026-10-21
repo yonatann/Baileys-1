@@ -26,6 +26,7 @@ import {
 	ACCOUNT_RESTRICTED_TEXT,
 	aesDecryptCTR,
 	aesEncryptGCM,
+	assertMeId,
 	buildHistorySyncOnDemandRequest,
 	cleanMessage,
 	collectServerSyncCollectionNames,
@@ -1392,7 +1393,12 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	 * `<retry count>` is the cap (MAX_RETRY) — there is no local per-(id, participant) counter —
 	 * and a refusal (count reached, unknown device) mutates nothing.
 	 */
-	const sendMessagesAgain = async (key: WAMessageKey, ids: string[], retryNode: BinaryNode, receiptNode: BinaryNode) => {
+	const sendMessagesAgain = async (
+		key: WAMessageKey,
+		ids: string[],
+		retryNode: BinaryNode,
+		receiptNode: BinaryNode
+	) => {
 		const remoteJid = key.remoteJid!
 		const requester = key.participant || remoteJid
 		const receivedRegId = getBinaryNodeChildUInt(receiptNode, 'registration', 4)
@@ -1427,6 +1433,8 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				},
 				getSenderKeyMemory: async group => (await authState.keys.get('sender-key-memory', [group]))[group] || {},
 				setSenderKeyMemory: (group, map) => authState.keys.set({ 'sender-key-memory': { [group]: map } }),
+				// same transaction key as `relayMessage`, so the forget never races a send's read-modify-write
+				withSenderKeyMemoryLock: (_group, fn) => authState.keys.transaction(fn, assertMeId(authState.creds)),
 				isMeDevice: jid => jid === meId || (!!meLid && jid === meLid),
 				isMeAccount: jid => areJidsSameUser(jid, isLidUser(jid) ? meLid : meId),
 				getLocalRegId: async jid => {
@@ -1445,9 +1453,17 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 							},
 							hasSame: async (jid, msgId) => {
 								const info = await signalRepository.getSessionInfo(jid)
-								return !!info && messageRetryManager.hasSameBaseKey(signalRepository.jidToSignalProtocolAddress(jid), msgId, info.baseKey)
+								return (
+									!!info &&
+									messageRetryManager.hasSameBaseKey(
+										signalRepository.jidToSignalProtocolAddress(jid),
+										msgId,
+										info.baseKey
+									)
+								)
 							},
-							delete: (jid, msgId) => messageRetryManager.deleteBaseKey(signalRepository.jidToSignalProtocolAddress(jid), msgId)
+							delete: (jid, msgId) =>
+								messageRetryManager.deleteBaseKey(signalRepository.jidToSignalProtocolAddress(jid), msgId)
 						}
 					: undefined,
 				ensureSession: jid => assertSessions([jid], false),
