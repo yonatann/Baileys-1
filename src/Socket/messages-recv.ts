@@ -14,7 +14,6 @@ import {
 import type {
 	GroupParticipant,
 	MessageReceiptType,
-	MessageRelayOptions,
 	MessageUserReceipt,
 	NewChatMessageCapInfo,
 	SocketConfig,
@@ -65,6 +64,7 @@ import { classifyServerEncryptNotification, runPreKeyLow } from '../Utils/login-
 import { makeMutex } from '../Utils/make-mutex'
 import { buildHistSyncServerErrorReceiptNode } from '../Utils/messages-media'
 import { makeOfflineNodeProcessor, type MessageType } from '../Utils/offline-node-processor'
+import { parseRetryReceiptCount, runRetryReceipt } from '../Utils/retry-receipt-parity'
 import { buildAckStanza } from '../Utils/stanza-ack'
 import {
 	buildMergedTcTokenIndexWrite,
@@ -1386,164 +1386,101 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		return data instanceof Buffer ? data : Buffer.from(data)
 	}
 
-	const willSendMessageAgain = async (id: string, participant: string) => {
-		const key = `${id}:${participant}`
-		const retryCount = (await msgRetryCache.get<number>(key)) || 0
-		return retryCount < maxMsgRetryCount
-	}
-
-	const updateSendMessageAgainCount = async (id: string, participant: string) => {
-		const key = `${id}:${participant}`
-		const newValue = ((await msgRetryCache.get<number>(key)) || 0) + 1
-		await msgRetryCache.set(key, newValue)
-	}
-
-	const sendMessagesAgain = async (
-		key: WAMessageKey,
-		ids: string[],
-		retryNode: BinaryNode,
-		receiptNode: BinaryNode
-	) => {
+	/**
+	 * WA Web parity (#298): an incoming retry receipt on a message we sent runs the exact
+	 * `WAWebHandleRetryRequest` sequence (see `Utils/retry-receipt-parity.ts`). The requester's own
+	 * `<retry count>` is the cap (MAX_RETRY) — there is no local per-(id, participant) counter —
+	 * and a refusal (count reached, unknown device) mutates nothing.
+	 */
+	const sendMessagesAgain = async (key: WAMessageKey, ids: string[], retryNode: BinaryNode, receiptNode: BinaryNode) => {
 		const remoteJid = key.remoteJid!
-		const participant = key.participant || remoteJid
+		const requester = key.participant || remoteJid
+		const receivedRegId = getBinaryNodeChildUInt(receiptNode, 'registration', 4)
+		const meId = authState.creds.me?.id
+		const meLid = authState.creds.me?.lid
 
-		const retryCount = +retryNode.attrs.count! || 1
-		const msgId = ids[0]
-
-		// Try to get messages from cache first, then fallback to getMessage
-		const msgs: (proto.IMessage | undefined)[] = []
-		for (const id of ids) {
-			let msg: proto.IMessage | undefined
-
-			// Try to get from retry cache first if enabled
-			if (messageRetryManager) {
-				const cachedMsg = messageRetryManager.getRecentMessage(remoteJid, id)
-				if (cachedMsg) {
-					msg = cachedMsg.message
-					logger.debug({ jid: remoteJid, id }, 'found message in retry cache')
-
-					// Mark retry as successful since we found the message
-					messageRetryManager.markRetrySuccess(id)
-				}
+		const listDevices = async (user: string): Promise<number[] | null> => {
+			const cached = await userDevicesCache?.get<JidWithDevice[]>(user)
+			if (cached?.length) {
+				return cached.map(d => d.device || 0)
 			}
 
-			// Fallback to getMessage if not found in cache
-			if (!msg) {
-				msg = await getMessage({ ...key, id })
-				if (msg) {
-					logger.debug({ jid: remoteJid, id }, 'found message via getMessage')
-					// Also mark as successful if found via getMessage
-					if (messageRetryManager) {
-						messageRetryManager.markRetrySuccess(id)
-					}
-				}
-			}
-
-			msgs.push(msg)
+			const stored = await authState.keys.get('device-list', [user])
+			const list = stored[user]
+			return list ? list.map(d => parseInt(d, 10) || 0) : null
 		}
 
-		// if it's the primary jid sending the request
-		// just re-send the message to everyone
-		// prevents the first message decryption failure
-		const sendToAll = !jidDecode(participant)?.device
-
-		const sessionId = signalRepository.jidToSignalProtocolAddress(participant)
-		let injectedFromBundle = false
-
-		const bundle = extractE2ESessionFromRetryReceipt(receiptNode)
-		if (bundle) {
-			try {
-				await signalRepository.injectE2ESession({ jid: participant, session: bundle })
-				injectedFromBundle = true
-				logger.debug({ participant, retryCount }, 'injected session from retry receipt key bundle')
-			} catch (error) {
-				logger.warn({ error, participant }, 'failed to inject session from retry receipt')
-			}
-		}
-
-		if (!injectedFromBundle) {
-			const receivedRegId = getBinaryNodeChildUInt(receiptNode, 'registration', 4)
-			if (typeof receivedRegId === 'number' && Number.isInteger(receivedRegId)) {
-				const info = await signalRepository.getSessionInfo(participant)
-				if (info && info.registrationId !== 0 && info.registrationId !== receivedRegId) {
-					logger.info(
-						{ participant, stored: info.registrationId, received: receivedRegId },
-						'reg id mismatch on retry without bundle, deleting session'
-					)
-					await authState.keys.set({ session: { [sessionId]: null } })
-				}
-			}
-		}
-
-		const BASE_KEY_CHECK_RETRY = 2
-		if (msgId && messageRetryManager) {
-			const info = await signalRepository.getSessionInfo(participant)
-			if (info) {
-				if (retryCount === BASE_KEY_CHECK_RETRY) {
-					messageRetryManager.saveBaseKey(sessionId, msgId, info.baseKey)
-				} else if (retryCount > BASE_KEY_CHECK_RETRY) {
-					if (messageRetryManager.hasSameBaseKey(sessionId, msgId, info.baseKey)) {
-						logger.warn({ participant, retryCount }, 'base key collision on retry, forcing fresh session')
-						await authState.keys.set({ session: { [sessionId]: null } })
+		const outcome = await runRetryReceipt(
+			{
+				logger,
+				maxRetry: maxMsgRetryCount,
+				listDevices: async user => {
+					const own = await listDevices(user)
+					if (own) return own
+					// `WAWebApiDeviceList.getDeviceIds` also consults the PN/LID alternate of the user
+					const isLid = isLidUser(requester)
+					const alt = isLid
+						? await signalRepository.lidMapping.getPNForLID(requester)
+						: await signalRepository.lidMapping.getLIDForPN(requester)
+					const altUser = alt ? jidDecode(alt)?.user : undefined
+					return altUser ? listDevices(altUser) : null
+				},
+				getSenderKeyMemory: async group => (await authState.keys.get('sender-key-memory', [group]))[group] || {},
+				setSenderKeyMemory: (group, map) => authState.keys.set({ 'sender-key-memory': { [group]: map } }),
+				isMeDevice: jid => jid === meId || (!!meLid && jid === meLid),
+				isMeAccount: jid => areJidsSameUser(jid, isLidUser(jid) ? meLid : meId),
+				getLocalRegId: async jid => {
+					const info = await signalRepository.getSessionInfo(jid)
+					return info && info.registrationId !== 0 ? info.registrationId : null
+				},
+				injectSession: (jid, session) => signalRepository.injectE2ESession({ jid, session }),
+				deleteSession: jid => signalRepository.deleteSession([jid]),
+				baseKey: messageRetryManager
+					? {
+							save: async (jid, msgId) => {
+								const info = await signalRepository.getSessionInfo(jid)
+								if (info) {
+									messageRetryManager.saveBaseKey(signalRepository.jidToSignalProtocolAddress(jid), msgId, info.baseKey)
+								}
+							},
+							hasSame: async (jid, msgId) => {
+								const info = await signalRepository.getSessionInfo(jid)
+								return !!info && messageRetryManager.hasSameBaseKey(signalRepository.jidToSignalProtocolAddress(jid), msgId, info.baseKey)
+							},
+							delete: (jid, msgId) => messageRetryManager.deleteBaseKey(signalRepository.jidToSignalProtocolAddress(jid), msgId)
+						}
+					: undefined,
+				ensureSession: jid => assertSessions([jid], false),
+				getMessage: async id => {
+					const cached = messageRetryManager?.getRecentMessage(remoteJid, id)
+					if (cached) {
+						messageRetryManager?.markRetrySuccess(id)
+						return cached.message
 					}
 
-					messageRetryManager.deleteBaseKey(sessionId, msgId)
-				}
+					const msg = await getMessage({ ...key, id })
+					if (msg) {
+						messageRetryManager?.markRetrySuccess(id)
+					}
+
+					return msg
+				},
+				resend: (id, msg, jid, count) =>
+					relayMessage(remoteJid, msg, { messageId: id, participant: { jid, count } }).then(() => undefined)
+			},
+			{
+				remoteJid,
+				requester,
+				retryCount: parseRetryReceiptCount(retryNode.attrs.count),
+				offline: !!receiptNode.attrs.offline,
+				receivedRegId: typeof receivedRegId === 'number' && Number.isInteger(receivedRegId) ? receivedRegId : null,
+				bundle: extractE2ESessionFromRetryReceipt(receiptNode),
+				ids
 			}
-		}
-
-		let shouldRecreateSession = false
-		let recreateReason = ''
-
-		if (enableAutoSessionRecreation && messageRetryManager && retryCount > 1 && !injectedFromBundle) {
-			try {
-				const hasSession = await signalRepository.validateSession(participant)
-				const result = messageRetryManager.shouldRecreateSession(participant, hasSession.exists)
-				shouldRecreateSession = result.recreate
-				recreateReason = result.reason
-
-				if (shouldRecreateSession) {
-					logger.debug({ participant, retryCount, reason: recreateReason }, 'recreating session for outgoing retry')
-					await authState.keys.set({ session: { [sessionId]: null } })
-				}
-			} catch (error) {
-				logger.warn({ error, participant }, 'failed to check session recreation for outgoing retry')
-			}
-		}
-
-		if (!injectedFromBundle) {
-			await assertSessions([participant], true)
-		}
-
-		if (isJidGroup(remoteJid)) {
-			await authState.keys.set({ 'sender-key-memory': { [remoteJid]: null } })
-		}
-
-		logger.debug(
-			{ participant, sendToAll, shouldRecreateSession, recreateReason, injectedFromBundle },
-			'prepared session for retry resend'
 		)
 
-		for (const [i, msg] of msgs.entries()) {
-			if (!ids[i]) continue
-
-			if (msg && (await willSendMessageAgain(ids[i], participant))) {
-				await updateSendMessageAgainCount(ids[i], participant)
-				const msgRelayOpts: MessageRelayOptions = { messageId: ids[i] }
-
-				if (sendToAll) {
-					msgRelayOpts.useUserDevicesCache = false
-				} else {
-					msgRelayOpts.participant = {
-						jid: participant,
-						count: +retryNode.attrs.count!
-					}
-				}
-
-				await relayMessage(key.remoteJid!, msg, msgRelayOpts)
-			} else {
-				logger.debug({ jid: key.remoteJid, id: ids[i] }, 'recv retry request, but message not available')
-			}
+		if (outcome.kind === 'handled') {
+			logger.info({ remoteJid, requester, sent: outcome.sent, notFound: outcome.notFound }, 'handled retry receipt')
 		}
 	}
 
@@ -1610,23 +1547,18 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						// correctly set who is asking for the retry
 						key.participant = key.participant || attrs.from
 						const retryNode = getBinaryNodeChild(node, 'retry')
-						if (ids[0] && key.participant && (await willSendMessageAgain(ids[0], key.participant))) {
-							if (key.fromMe) {
-								try {
-									await updateSendMessageAgainCount(ids[0], key.participant)
-									logger.debug({ attrs, key }, 'recv retry request')
-									await sendMessagesAgain(key, ids, retryNode!, node)
-								} catch (error: unknown) {
-									logger.error(
-										{ key, ids, trace: error instanceof Error ? error.stack : 'Unknown error' },
-										'error in sending message again'
-									)
-								}
-							} else {
-								logger.info({ attrs, key }, 'recv retry for not fromMe message')
+						if (key.fromMe && retryNode) {
+							try {
+								logger.debug({ attrs, key }, 'recv retry request')
+								await sendMessagesAgain(key, ids, retryNode, node)
+							} catch (error: unknown) {
+								logger.error(
+									{ key, ids, trace: error instanceof Error ? error.stack : 'Unknown error' },
+									'error in sending message again'
+								)
 							}
 						} else {
-							logger.info({ attrs, key }, 'will not send message again, as sent too many times')
+							logger.info({ attrs, key }, 'recv retry for not fromMe message')
 						}
 					}
 				})
