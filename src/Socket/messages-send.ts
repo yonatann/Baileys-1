@@ -53,6 +53,7 @@ import { makeKeyedMutex, makeMutex } from '../Utils/make-mutex'
 import { encryptMessageEdit } from '../Utils/message-edit-secret'
 import { buildNewsletterMessageNode, captureUploadHandle } from '../Utils/newsletter-stanza'
 import { getMessageReportingToken, isRevokeMessage, shouldIncludeReportingToken } from '../Utils/reporting-utils'
+import { isPrimaryDeviceJid } from '../Utils/retry-receipt-parity'
 import {
 	buildMergedTcTokenIndexWrite,
 	isTcTokenExpired,
@@ -590,7 +591,14 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		recipientJids: string[],
 		message: proto.IMessage,
 		extraAttrs?: BinaryNode['attrs'],
-		dsmMessage?: proto.IMessage
+		dsmMessage?: proto.IMessage,
+		opts?: {
+			/**
+			 * WA Web parity (#298): `WAWebGetGroupKeyDistributionMsg` drops a companion device whose
+			 * sender-key encryption fails but rejects the whole send when a PRIMARY device fails.
+			 */
+			rejectOnPrimaryDeviceFailure?: boolean
+		}
 	) => {
 		if (!recipientJids.length) {
 			return { nodes: [] as BinaryNode[], shouldIncludeDeviceIdentity: false }
@@ -653,6 +661,13 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					return node
 				} catch (err) {
 					logger.error({ jid, err }, 'Failed to encrypt for recipient')
+					if (opts?.rejectOnPrimaryDeviceFailure && isPrimaryDeviceJid(jid)) {
+						throw new Boom(`getKeyDistributionMsg: encryption fail for primary device ${jid}`, {
+							statusCode: 500,
+							data: err
+						})
+					}
+
 					return null
 				}
 			}
@@ -685,7 +700,9 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		const meId = assertMeId(authState.creds)
 		const meLid = authState.creds.me?.lid
 		const isRetryResend = Boolean(participant?.jid)
-		let shouldIncludeDeviceIdentity = isRetryResend
+		// WA Web parity (#298): `WAWebSendMsgCreateDeviceStanza` attaches `<device-identity>` only when
+		// the enc type is pkmsg, for a retry resend as for any other device stanza.
+		let shouldIncludeDeviceIdentity = false
 		const statusJid = 'status@broadcast'
 
 		const { user, server } = jidDecode(jid)!
@@ -884,10 +901,21 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 							'batch assertSessions failed — retrying per-JID to skip unreachable devices'
 						)
 						reachableRecipients = await assertSessionsPerJid(senderKeySessionTargets)
+						const droppedPrimary = senderKeySessionTargets.find(
+							j => isPrimaryDeviceJid(j) && !reachableRecipients.includes(j)
+						)
+						if (droppedPrimary) {
+							throw new Boom(`getKeyDistributionMsg: encryption fail for primary device ${droppedPrimary}`, {
+								statusCode: 500,
+								data: sessionErr
+							})
+						}
 					}
 
 					if (reachableRecipients.length) {
-						const result = await createParticipantNodes(reachableRecipients, senderKeyMsg, extraAttrs)
+						const result = await createParticipantNodes(reachableRecipients, senderKeyMsg, extraAttrs, undefined, {
+							rejectOnPrimaryDeviceFailure: true
+						})
 						shouldIncludeDeviceIdentity = shouldIncludeDeviceIdentity || result.shouldIncludeDeviceIdentity
 						if (contentBindings) {
 							appendContentBindings(result.nodes, contentBindings, deviceJid => deviceJid)
@@ -1044,34 +1072,10 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				const isParticipantLid = isLidUser(participant!.jid)
 				const isMe = areJidsSameUser(participant!.jid, isParticipantLid ? meLid : meId)
 
-				let messageToSend = message
-				if (isGroupOrStatus) {
-					let groupSenderIdentity: string | undefined
-					if (meLid && (await signalRepository.hasSenderKey({ group: destinationJid, meId: meLid }))) {
-						groupSenderIdentity = meLid
-					} else if (await signalRepository.hasSenderKey({ group: destinationJid, meId })) {
-						groupSenderIdentity = meId
-					}
-
-					if (groupSenderIdentity) {
-						try {
-							const skdm = await signalRepository.getSenderKeyDistributionMessage({
-								group: destinationJid,
-								meId: groupSenderIdentity
-							})
-							messageToSend = {
-								...message,
-								senderKeyDistributionMessage: {
-									groupId: destinationJid,
-									axolotlSenderKeyDistributionMessage: skdm
-								}
-							}
-						} catch (err) {
-							logger.warn({ err, jid: destinationJid }, 'failed to build SKDM for retry, sending without it')
-						}
-					}
-				}
-
+				// WA Web parity (#298): `WAWebSendRetryMsgJob.sendRetry` → `createGroupDeviceMsgStanza` is a
+				// plain 1:1 encrypt of the message proto (`encryptMsgProtobuf`); the requester gets a fresh
+				// sender key with the NEXT skmsg because its sender-key entry was forgotten on the receipt.
+				const messageToSend = message
 				const encodedMessageToSend = isMe
 					? encodeWAMessage({
 							deviceSentMessage: {
@@ -1086,15 +1090,17 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					jid: participant!.jid
 				})
 
+				// `count: C === 0 ? DROP_ATTR : INT(C)`: a count of 0 is not written on the enc node
 				binaryNodeContent.push({
 					tag: 'enc',
 					attrs: {
 						v: '2',
 						type,
-						count: participant!.count.toString()
+						...(participant!.count ? { count: participant!.count.toString() } : {})
 					},
 					content: encryptedContent
 				})
+				shouldIncludeDeviceIdentity = shouldIncludeDeviceIdentity || type === 'pkmsg'
 			}
 
 			if (participants.length) {
