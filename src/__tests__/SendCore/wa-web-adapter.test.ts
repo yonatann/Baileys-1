@@ -4,6 +4,7 @@ import { readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import type { proto } from '../../../WAProto/index.js'
+import type { SendCoreAdapter } from '../../SendCore/types'
 import type { WaWapNode, WaWebModules, WaWid } from '../../SendCore/wa-web/modules'
 import type { MessageRelayOptions } from '../../Types'
 import type { BinaryNode } from '../../WABinary'
@@ -33,7 +34,8 @@ const { binaryNodeToString, encodeBinaryNode, jidDecode } = await import('../../
  * asserts the stanza handed to WA Web's socket is byte-identical to the fixture the Baileys socket
  * produced for the same input. One send core, two transports, one wire shape.
  *
- * Covers the 1:1 cases only: group sends need sender keys, which this adapter does not wire yet.
+ * Covers the 1:1 cases (slice 2) and the group / status cases (slice 3: sender keys through WA Web's own
+ * sender-key session and participant table).
  */
 
 const ME_PN_USER = '972500000001'
@@ -43,10 +45,17 @@ const OTHER_PN_USER = '972500000002'
 const OTHER_LID_USER = '100000000000002'
 const OTHER_PN = `${OTHER_PN_USER}@s.whatsapp.net`
 const OTHER_LID = `${OTHER_LID_USER}@lid`
+const THIRD_PN_USER = '972500000003'
+const THIRD_LID_USER = '100000000000003'
+const THIRD_PN = `${THIRD_PN_USER}@s.whatsapp.net`
+const GROUP_JID = '120363000000000001@g.us'
+const NEWSLETTER_JID = '120363000000000002@newsletter'
+const STATUS_JID = 'status@broadcast'
 
 const LID_USER_BY_PN_USER: Record<string, string> = {
 	[ME_PN_USER]: ME_LID_USER,
-	[OTHER_PN_USER]: OTHER_LID_USER
+	[OTHER_PN_USER]: OTHER_LID_USER,
+	[THIRD_PN_USER]: THIRD_LID_USER
 }
 const PN_USER_BY_LID_USER: Record<string, string> = Object.fromEntries(
 	Object.entries(LID_USER_BY_PN_USER).map(([pn, lid]) => [lid, pn])
@@ -57,7 +66,15 @@ const DEVICES_BY_USER: Record<string, { id: number; keyIndex?: number }[]> = {
 	[ME_PN_USER]: [{ id: 0 }, { id: ME_DEVICE, keyIndex: 1 }],
 	[ME_LID_USER]: [{ id: 0 }, { id: ME_DEVICE, keyIndex: 1 }],
 	[OTHER_PN_USER]: [{ id: 0 }, { id: 3, keyIndex: 1 }],
-	[OTHER_LID_USER]: [{ id: 0 }, { id: 3, keyIndex: 1 }]
+	[OTHER_LID_USER]: [{ id: 0 }, { id: 3, keyIndex: 1 }],
+	[THIRD_PN_USER]: [{ id: 0 }],
+	[THIRD_LID_USER]: [{ id: 0 }]
+}
+
+/** the snapshot group's members, in each addressing mode, as WA Web's group model lists them */
+const GROUP_MEMBERS: Record<'pn' | 'lid', string[]> = {
+	pn: [`${ME_PN_USER}@c.us`, `${OTHER_PN_USER}@c.us`, `${THIRD_PN_USER}@c.us`],
+	lid: [`${ME_LID_USER}@lid`, `${OTHER_LID_USER}@lid`, `${THIRD_LID_USER}@lid`]
 }
 
 /** device jids with no session yet (they get a pkmsg) */
@@ -104,13 +121,30 @@ const wapToBinary = (node: WaWapNode): BinaryNode => ({
 	content: Array.isArray(node.content) ? node.content.map(wapToBinary) : node.content
 })
 
-const makeStubModules = () => {
+type SenderKeyRow = { keyed: Set<string>; rotateKey: boolean }
+
+const makeStubModules = (opts: { addressingMode?: 'pn' | 'lid' } = {}) => {
 	const sent: WaWapNode[] = []
 	const iqs: WaWapNode[] = []
 	const tokens = new Map<string, { token: Uint8Array; timestamp?: string; senderTimestamp?: number }>()
-	for (const lidUser of [ME_LID_USER, OTHER_LID_USER]) {
+	for (const lidUser of [ME_LID_USER, OTHER_LID_USER, THIRD_LID_USER]) {
 		tokens.set(`${lidUser}@lid`, { token: TC_TOKEN, timestamp: String(NOW_SEC), senderTimestamp: NOW_SEC })
 	}
+
+	/** WA Web's participant table: per group, the device Wids (serialized) that hold our sender key */
+	const senderKeyRows = new Map<string, SenderKeyRow>()
+	const senderKeyRow = (group: string) => {
+		let row = senderKeyRows.get(group)
+		if (!row) {
+			row = { keyed: new Set(), rotateKey: false }
+			senderKeyRows.set(group, row)
+		}
+
+		return row
+	}
+
+	const deletedSenderKeys: string[] = []
+	const addressingMode = opts.addressingMode ?? 'pn'
 
 	const modules: WaWebModules = {
 		makeWid,
@@ -144,10 +178,36 @@ const makeStubModules = () => {
 			hasSignalSessions: async wids => wids.map(() => true),
 			createSignalSession: async () => {
 				throw new Error('no session should be created: every device already has one')
+			},
+			// same fake sender-key functions as the socket snapshot: WA Web hands both back from one call
+			encryptSenderKeyMsgSignalProto: async (group, me, data) => ({
+				ciphertext: sha256('skenc:', widToJid(group), ':', unpadRandomMax16(data)),
+				senderKeyBytes: sha256('skdm:', widToJid(group), ':', widToJid(me))
+			}),
+			deleteGroupSenderKeyInfo: async group => {
+				deletedSenderKeys.push(group.toString())
 			}
 		},
 		getDeviceIds: async wids =>
 			wids.map(wid => ({ wid: makeWid(`${wid.user}@${wid.server}`), devices: DEVICES_BY_USER[wid.user] ?? [] })),
+		groupMetadata: async group =>
+			group.toString() === GROUP_JID
+				? { participants: GROUP_MEMBERS[addressingMode].map(makeWid), addressingMode }
+				: undefined,
+		senderKeys: {
+			get: async group => {
+				const row = senderKeyRow(group.toString())
+				return { keyed: [...row.keyed].map(makeWid), rotateKey: row.rotateKey }
+			},
+			markHasSenderKey: async (group, devices) => {
+				const row = senderKeyRow(group.toString())
+				for (const device of devices) {
+					row.keyed.add(device.toString())
+				}
+
+				row.rotateKey = false
+			}
+		},
 		lidForPn: pn => (pn.server === 'lid' ? null : alternate(pn)),
 		pnForLid: lid => (lid.server === 'lid' ? alternate(lid) : null),
 		tcToken: {
@@ -162,8 +222,12 @@ const makeStubModules = () => {
 		},
 		abProps: () => ({ privacyTokenOn1to1: true, lidTrustedTokenIssueToLid: false })
 	}
-	return { modules, sent, iqs, tokens }
+	return { modules, sent, iqs, tokens, senderKeyRows, senderKeyRow, deletedSenderKeys }
 }
+
+type Stub = ReturnType<typeof makeStubModules>
+
+const silent = () => logger.child({}, { level: 'silent' })
 
 const FIXTURE_PATH = join(
 	dirname(fileURLToPath(import.meta.url)),
@@ -176,9 +240,16 @@ const fixtures: Record<string, { hex: string; xml: string }> = JSON.parse(readFi
 
 const text = (conversation: string): proto.IMessage => ({ conversation })
 
-type Case = { name: string; jid: string; message: proto.IMessage; options: MessageRelayOptions }
+type Case = {
+	name: string
+	jid: string
+	message: proto.IMessage
+	options: MessageRelayOptions
+	addressingMode?: 'pn' | 'lid'
+	seed?: (adapter: SendCoreAdapter, stub: Stub) => Promise<void>
+}
 
-/** the 1:1 cases of the socket snapshot, by fixture name, verbatim */
+/** every case of the socket snapshot, by fixture name, verbatim */
 const CASES: Case[] = [
 	{ name: 'text-1to1-pn', jid: OTHER_PN, message: text('hello pn'), options: { messageId: 'SNAP0001' } },
 	{ name: 'text-1to1-lid', jid: OTHER_LID, message: text('hello lid'), options: { messageId: 'SNAP0002' } },
@@ -224,6 +295,32 @@ const CASES: Case[] = [
 		},
 		options: { messageId: 'SNAP0006' }
 	},
+	{ name: 'group-skmsg-fresh-pn', jid: GROUP_JID, message: text('hello group'), options: { messageId: 'SNAP0007' } },
+	{
+		name: 'group-skmsg-fresh-lid',
+		jid: GROUP_JID,
+		message: text('hello lid group'),
+		options: { messageId: 'SNAP0008' },
+		addressingMode: 'lid'
+	},
+	{
+		name: 'group-skmsg-known-keys',
+		jid: GROUP_JID,
+		message: text('hello again group'),
+		options: { messageId: 'SNAP0009' },
+		// the same seed as the socket test, through the adapter's store: own devices stay in the adapter,
+		// the other members' devices land in WA Web's participant table
+		seed: async adapter => {
+			const known: Record<string, boolean> = {}
+			for (const user of [ME_PN_USER, OTHER_PN_USER, THIRD_PN_USER]) {
+				for (const { id } of DEVICES_BY_USER[user]!) {
+					known[id ? `${user}:${id}@s.whatsapp.net` : `${user}@s.whatsapp.net`] = true
+				}
+			}
+
+			await adapter.keys.set({ 'sender-key-memory': { [GROUP_JID]: known } })
+		}
+	},
 	{
 		name: 'retry-1to1-pn',
 		jid: OTHER_PN,
@@ -237,6 +334,12 @@ const CASES: Case[] = [
 		options: { messageId: 'SNAP0001', participant: { jid: `${ME_PN_USER}@s.whatsapp.net`, count: 1 } }
 	},
 	{
+		name: 'retry-group',
+		jid: GROUP_JID,
+		message: text('hello group'),
+		options: { messageId: 'SNAP0007', participant: { jid: THIRD_PN, count: 0 } }
+	},
+	{
 		name: 'peer-app-state-key-request',
 		jid: `${ME_PN_USER}@s.whatsapp.net`,
 		message: {
@@ -246,6 +349,13 @@ const CASES: Case[] = [
 			}
 		},
 		options: { messageId: 'SNAP0010', additionalAttributes: { category: 'peer', push_priority: 'high' } }
+	},
+	{ name: 'newsletter-text', jid: NEWSLETTER_JID, message: text('hello channel'), options: { messageId: 'SNAP0011' } },
+	{
+		name: 'status-broadcast',
+		jid: STATUS_JID,
+		message: text('my status'),
+		options: { messageId: 'SNAP0012', statusJidList: [OTHER_PN, THIRD_PN] }
 	},
 	{
 		name: 'text-1to1-additional-nodes',
@@ -263,8 +373,10 @@ const CASES: Case[] = [
 describe('wa-web adapter', () => {
 	for (const c of CASES) {
 		it(`relays ${c.name} byte-identically to the Baileys socket`, async () => {
-			const { modules, sent, iqs } = makeStubModules()
-			const adapter = makeWaWebAdapter({ modules, logger: logger.child({}, { level: 'silent' }) })
+			const stub = makeStubModules({ addressingMode: c.addressingMode })
+			const { modules, sent, iqs } = stub
+			const adapter = makeWaWebAdapter({ modules, logger: silent() })
+			await c.seed?.(adapter, stub)
 			await buildAndRelay(adapter, c.jid, c.message, c.options)
 
 			expect(iqs).toHaveLength(0)
@@ -277,6 +389,10 @@ describe('wa-web adapter', () => {
 			expect(Buffer.from(encodeBinaryNode(node)).toString('hex')).toBe(expected!.hex)
 		})
 	}
+
+	it('covers every fixture the socket snapshot recorded', () => {
+		expect(CASES.map(c => c.name).sort()).toEqual(Object.keys(fixtures).sort())
+	})
 
 	it('hands WA Web Wids, not strings, for every jid attribute', async () => {
 		const { modules, sent } = makeStubModules()
@@ -476,13 +592,106 @@ describe('wa-web adapter', () => {
 		expect(sent).toHaveLength(1)
 	})
 
-	it('refuses group sends until sender keys are wired', async () => {
-		const { modules, sent } = makeStubModules()
-		const adapter = makeWaWebAdapter({ modules, logger: logger.child({}, { level: 'silent' }) })
-		await expect(
-			buildAndRelay(adapter, '120363000000000001@g.us', text('hello group'), { messageId: 'SNAP0007' })
-		).rejects.toThrow(/not wired yet/)
-		expect(sent).toHaveLength(0)
+	describe('groups', () => {
+		const participantsOf = (stanza: WaWapNode) =>
+			((stanza.content as WaWapNode[]).find(n => n.tag === 'participants')?.content as WaWapNode[] | undefined)?.map(
+				to => (to.attrs.jid as WaWid).toString()
+			)
+
+		it('records delivered sender keys in WA Web (other devices) and in the adapter (own devices) after the ack', async () => {
+			const stub = makeStubModules()
+			const { modules, sent, senderKeyRow } = stub
+			const adapter = makeWaWebAdapter({ modules, logger: silent() })
+			await buildAndRelay(adapter, GROUP_JID, text('hello group'), { messageId: 'SNAP0007' })
+
+			// WA Web's table holds exactly the other members' devices, never ours
+			expect([...senderKeyRow(GROUP_JID).keyed].sort()).toEqual(
+				[`${OTHER_PN_USER}@c.us`, `${OTHER_PN_USER}:3@c.us`, `${THIRD_PN_USER}@c.us`].sort()
+			)
+			// the core sees the union (our primary stays in the adapter), so the next send carries no key
+			// distribution at all
+			const memory = await adapter.keys.get('sender-key-memory', [GROUP_JID])
+			expect(Object.keys(memory[GROUP_JID]!).sort()).toEqual(
+				[`${ME_PN_USER}@s.whatsapp.net`, OTHER_PN, `${OTHER_PN_USER}:3@s.whatsapp.net`, THIRD_PN].sort()
+			)
+			await buildAndRelay(adapter, GROUP_JID, text('hello again group'), { messageId: 'SNAP0009' })
+			expect(sent).toHaveLength(2)
+			expect(participantsOf(sent[1]!)).toBeUndefined()
+		})
+
+		it('keeps a failed send out of the sender-key bookkeeping', async () => {
+			const stub = makeStubModules()
+			const { modules, senderKeyRow } = stub
+			modules.sendStanzaAndReturnAck = async () => {
+				throw new Error('socket closed')
+			}
+
+			const adapter = makeWaWebAdapter({ modules, logger: silent() })
+			await expect(buildAndRelay(adapter, GROUP_JID, text('hello group'), { messageId: 'SNAP0007' })).rejects.toThrow(
+				'socket closed'
+			)
+
+			expect(senderKeyRow(GROUP_JID).keyed.size).toBe(0)
+			expect(await adapter.keys.get('sender-key-memory', [GROUP_JID])).toEqual({ [GROUP_JID]: {} })
+			expect(adapter.keys.isInTransaction()).toBe(false)
+
+			// the retry distributes the key to everyone again, as if the first attempt never happened
+			const sent: WaWapNode[] = []
+			modules.sendStanzaAndReturnAck = async stanza => {
+				sent.push(stanza)
+				return { ack: true }
+			}
+
+			await buildAndRelay(adapter, GROUP_JID, text('hello group'), { messageId: 'SNAP0007' })
+			expect(binaryNodeToString(wapToBinary(sent[0]!))).toBe(fixtures['group-skmsg-fresh-pn']!.xml)
+		})
+
+		it('rotates the sender key when WA Web flagged the group, and redistributes to everyone', async () => {
+			const stub = makeStubModules()
+			const { modules, sent, senderKeyRow, deletedSenderKeys } = stub
+			const adapter = makeWaWebAdapter({ modules, logger: silent() })
+			await buildAndRelay(adapter, GROUP_JID, text('hello group'), { messageId: 'SNAP0007' })
+			expect(deletedSenderKeys).toEqual([])
+
+			// a member left: WA Web raises rotateKey on the participant row
+			senderKeyRow(GROUP_JID).rotateKey = true
+			await buildAndRelay(adapter, GROUP_JID, text('hello group'), { messageId: 'SNAP0007' })
+
+			expect(deletedSenderKeys).toEqual([GROUP_JID])
+			expect(sent).toHaveLength(2)
+			// own devices included: the adapter's own-device bookkeeping was reset along with the key
+			expect(binaryNodeToString(wapToBinary(sent[1]!))).toBe(fixtures['group-skmsg-fresh-pn']!.xml)
+			expect(senderKeyRow(GROUP_JID).rotateKey).toBe(false)
+			// a third send is quiet again
+			await buildAndRelay(adapter, GROUP_JID, text('hello again group'), { messageId: 'SNAP0009' })
+			expect(deletedSenderKeys).toEqual([GROUP_JID])
+			expect(participantsOf(sent[2]!)).toBeUndefined()
+		})
+
+		it('reads members and addressing mode from WA Web, never from the wire', async () => {
+			const stub = makeStubModules()
+			const { modules, sent, iqs } = stub
+			modules.groupMetadata = async () => undefined
+			const adapter = makeWaWebAdapter({ modules, logger: silent() })
+			await expect(buildAndRelay(adapter, GROUP_JID, text('hello group'), { messageId: 'SNAP0007' })).rejects.toThrow(
+				/holds no metadata/
+			)
+			expect(iqs).toHaveLength(0)
+			expect(sent).toHaveLength(0)
+		})
+
+		it('stamps the expiration attribute from the group timer', async () => {
+			const stub = makeStubModules()
+			const { modules, sent } = stub
+			modules.groupMetadata = async () => ({
+				participants: GROUP_MEMBERS.pn.map(makeWid),
+				addressingMode: 'pn',
+				ephemeralDuration: 86400
+			})
+			const adapter = makeWaWebAdapter({ modules, logger: silent() })
+			await buildAndRelay(adapter, GROUP_JID, text('hello group'), { messageId: 'SNAP0007' })
+			expect(sent[0]!.attrs.expiration).toBe('86400')
+		})
 	})
 
 	it('round-trips jids through wids without changing their spelling', () => {

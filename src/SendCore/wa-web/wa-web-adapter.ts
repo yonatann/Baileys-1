@@ -1,10 +1,12 @@
 import NodeCache from '@cacheable/node-cache'
 import { Boom } from '@hapi/boom'
-import type {
-	PossiblyExtendedCacheStore,
-	SignalDataSet,
-	SignalDataTypeMap,
-	SignalKeyStoreWithTransaction
+import {
+	type GroupMetadata,
+	type PossiblyExtendedCacheStore,
+	type SignalDataSet,
+	type SignalDataTypeMap,
+	type SignalKeyStoreWithTransaction,
+	WAMessageAddressingMode
 } from '../../Types'
 import { DEFAULT_LID_REFETCH_THROTTLE_SEC } from '../../Utils'
 import type { ILogger } from '../../Utils/logger'
@@ -21,10 +23,10 @@ import type { WaWapNode, WaWebModules, WaWid } from './modules'
  *
  * - JIDs: WA Web says `c.us`, Baileys says `s.whatsapp.net`; `lid` and `g.us` match.
  * - Nodes: `BinaryNode` and `WapNode` are the same tag / attrs / children tree; JID-valued attrs become Wids.
- * - Keys: WA Web has no `SignalKeyStore`; `sender-key-memory` and `device-list` live in memory here,
- *   `tctoken` reads through to WA Web's token store.
- *
- * Groups (sender keys) are not wired yet: `encryptGroupMessage` throws until that slice lands.
+ * - Keys: WA Web has no `SignalKeyStore`; `tctoken` reads through to WA Web's token store and
+ *   `sender-key-memory` to its participant table, `device-list` lives in memory here.
+ * - Groups: the skmsg ciphertext and the sender-key distribution message come from WA Web's own
+ *   sender-key session for the group; member lists and addressing mode from its group model.
  */
 
 const JID_ATTRS = new Set(['to', 'from', 'participant', 'recipient', 'jid', 'peer_recipient_pn'])
@@ -90,27 +92,112 @@ export const makeWaWebAdapter = ({ modules, logger, onAck }: WaWebAdapterOptions
 		return { tag: node.tag, attrs, content }
 	}
 
-	// In-memory store for the key types the send core touches; tctoken reads through to WA Web for
-	// jid-keyed entries. The core also keeps a bookkeeping row under `TC_TOKEN_INDEX_KEY` (`__index`,
-	// the list of jids it has tokens for); that is not a jid and stays in memory with the rest.
+	const isMeDevice = (jid: string) => {
+		const me = modules.me()
+		const user = jidDecode(jid)?.user
+		return !!me && !!user && (user === me.pn.user || user === me.lid?.user)
+	}
+
+	// Key store the send core writes through. Two of its types belong to WA Web and read through:
+	// - `tctoken` for jid-keyed entries (WA Web's token store). The core also keeps a bookkeeping row under
+	//   `TC_TOKEN_INDEX_KEY` (`__index`, the list of jids it has tokens for); not a jid, stays in memory.
+	// - `sender-key-memory` (which devices hold our sender key for a group) = WA Web's participant table,
+	//   so native and raw sends agree on who still needs the key. WA Web never tracks the account's own
+	//   devices there (it never fans out to them; the core does), so those live in `ownDeviceKeys`.
+	// Everything else (`device-list`) is in memory.
 	const memory: { [T in keyof SignalDataTypeMap]?: { [id: string]: SignalDataTypeMap[T] } } = {}
+	const ownDeviceKeys: { [group: string]: { [deviceJid: string]: boolean } } = {}
+	// groups whose key WA Web flagged for rotation (a member left): the next encrypt drops the key first
+	const pendingRotation = new Set<string>()
 	const isWaWebToken = (type: keyof SignalDataTypeMap, id: string) => type === 'tctoken' && !!jidDecode(id)
+
+	const readSenderKeyMemory = async (group: string): Promise<SignalDataTypeMap['sender-key-memory']> => {
+		const { keyed, rotateKey } = await modules.senderKeys.get(jidToWid(group))
+		if (rotateKey) {
+			pendingRotation.add(group)
+			return {}
+		}
+
+		const map: SignalDataTypeMap['sender-key-memory'] = { ...ownDeviceKeys[group] }
+		for (const wid of keyed) {
+			map[widToJid(wid)] = true
+		}
+
+		return map
+	}
+
+	const writeSenderKeyMemory = async (group: string, map: SignalDataTypeMap['sender-key-memory'] | null) => {
+		if (!map) {
+			delete ownDeviceKeys[group]
+			return
+		}
+
+		const others: WaWid[] = []
+		const own: { [deviceJid: string]: boolean } = {}
+		for (const [deviceJid, hasKey] of Object.entries(map)) {
+			if (!hasKey) continue
+			if (isMeDevice(deviceJid)) {
+				own[deviceJid] = true
+			} else {
+				others.push(jidToWid(deviceJid))
+			}
+		}
+
+		ownDeviceKeys[group] = own
+		if (others.length) {
+			await modules.senderKeys.markHasSenderKey(jidToWid(group), others)
+		}
+	}
+
+	const readOne = async (type: keyof SignalDataTypeMap, id: string): Promise<unknown> => {
+		if (isWaWebToken(type, id)) {
+			const entry = await modules.tcToken.get(jidToWid(id))
+			return entry ? { ...entry, token: Buffer.from(entry.token) } : undefined
+		}
+
+		if (type === 'sender-key-memory') {
+			return readSenderKeyMemory(id)
+		}
+
+		return memory[type]?.[id]
+	}
+
+	const writeOne = async (type: keyof SignalDataTypeMap, id: string, value: unknown) => {
+		if (isWaWebToken(type, id)) {
+			await modules.tcToken.set(jidToWid(id), value as SignalDataTypeMap['tctoken'] | null)
+			return
+		}
+
+		if (type === 'sender-key-memory') {
+			await writeSenderKeyMemory(id, value as SignalDataTypeMap['sender-key-memory'] | null)
+			return
+		}
+
+		const bucket = (memory[type] ||= {}) as { [id: string]: unknown }
+		if (value === null) {
+			delete bucket[id]
+		} else {
+			bucket[id] = value
+		}
+	}
+
+	// The core wraps a send in `keys.transaction` and writes `sender-key-memory` BEFORE the stanza goes
+	// out; the Baileys store buffers those writes and drops them when the send throws. Same here: inside
+	// a transaction, writes land in `pending` (reads see them), and only a transaction that returns
+	// normally flushes them. A failed group send therefore never records a sender key as delivered,
+	// and the flush matches WA Web's own order (`markHasSenderKey` after the ack). WA Web runs the send
+	// from inside its per-chat queue, so transactions never overlap; a nested one joins the outer.
+	let txDepth = 0
+	let pending: { [T in keyof SignalDataTypeMap]?: { [id: string]: SignalDataTypeMap[T] | null } } = {}
+
 	const keys: SignalKeyStoreWithTransaction = {
 		async get(type, ids) {
 			const out: { [id: string]: SignalDataTypeMap[typeof type] } = {}
 			for (const id of ids) {
-				if (isWaWebToken(type, id)) {
-					const entry = await modules.tcToken.get(jidToWid(id))
-					if (entry) {
-						out[id] = { ...entry, token: Buffer.from(entry.token) } as SignalDataTypeMap[typeof type]
-					}
-
-					continue
-				}
-
-				const value = memory[type]?.[id]
-				if (value !== undefined) {
-					out[id] = value
+				const buffered = pending[type]
+				const value = buffered && id in buffered ? buffered[id] : await readOne(type, id)
+				if (value !== undefined && value !== null) {
+					out[id] = value as SignalDataTypeMap[typeof type]
 				}
 			}
 
@@ -121,32 +208,59 @@ export const makeWaWebAdapter = ({ modules, logger, onAck }: WaWebAdapterOptions
 				const entries = data[type]
 				if (!entries) continue
 				for (const [id, value] of Object.entries(entries)) {
-					if (isWaWebToken(type, id)) {
-						await modules.tcToken.set(jidToWid(id), value as SignalDataTypeMap['tctoken'] | null)
-						continue
-					}
-
-					const bucket = (memory[type] ||= {}) as { [id: string]: unknown }
-					if (value === null) {
-						delete bucket[id]
-					} else {
+					if (txDepth > 0) {
+						const bucket = (pending[type] ||= {}) as { [id: string]: unknown }
 						bucket[id] = value
+					} else {
+						await writeOne(type, id, value)
 					}
 				}
 			}
 		},
-		isInTransaction: () => false,
-		// WA Web serialises Signal work through its per-chat queues; the host runs buildAndRelay from
-		// inside that queue, so there is nothing to batch here.
-		transaction: exec => exec()
+		isInTransaction: () => txDepth > 0,
+		async transaction(exec) {
+			txDepth++
+			try {
+				const result = await exec()
+				if (txDepth === 1) {
+					const toFlush = pending
+					pending = {}
+					for (const type of Object.keys(toFlush) as (keyof SignalDataTypeMap)[]) {
+						for (const [id, value] of Object.entries(toFlush[type] ?? {})) {
+							await writeOne(type, id, value)
+						}
+					}
+				}
+
+				return result
+			} catch (err) {
+				if (txDepth === 1) {
+					pending = {}
+				}
+
+				throw err
+			} finally {
+				txDepth--
+			}
+		}
 	}
 
 	const signal: SendCoreSignal = {
 		async encryptMessage({ jid, data }) {
 			return modules.signal.encryptSignalProto(jidToWid(jid), data)
 		},
-		async encryptGroupMessage() {
-			throw new Boom('wa-web adapter: group sends are not wired yet', { statusCode: 501 })
+		async encryptGroupMessage({ group, data, meId }) {
+			const groupWid = jidToWid(group)
+			const meWid = jidToWid(meId)
+			if (pendingRotation.has(group)) {
+				// a member left since the last send: fresh key, and nobody (own devices included) holds it yet
+				await modules.signal.deleteGroupSenderKeyInfo(groupWid, meWid)
+				delete ownDeviceKeys[group]
+				pendingRotation.delete(group)
+			}
+
+			const { ciphertext, senderKeyBytes } = await modules.signal.encryptSenderKeyMsgSignalProto(groupWid, meWid, data)
+			return { ciphertext, senderKeyDistributionMessage: senderKeyBytes }
 		},
 		async validateSession(jid) {
 			const [exists] = await modules.signal.hasSignalSessions([jidToWid(jid)])
@@ -173,6 +287,22 @@ export const makeWaWebAdapter = ({ modules, logger, onAck }: WaWebAdapterOptions
 			},
 			// WA Web owns the LID/PN cache; a usync answer never teaches it anything new.
 			async storeLIDPNMappings() {}
+		}
+	}
+
+	const readGroupMetadata = async (jid: string): Promise<GroupMetadata | undefined> => {
+		const model = await modules.groupMetadata(jidToWid(jid))
+		if (!model) {
+			return undefined
+		}
+
+		return {
+			id: jid,
+			owner: undefined,
+			subject: '',
+			addressingMode: model.addressingMode === 'lid' ? WAMessageAddressingMode.LID : WAMessageAddressingMode.PN,
+			ephemeralDuration: model.ephemeralDuration,
+			participants: model.participants.map(wid => ({ id: widToJid(wid), admin: null }))
 		}
 	}
 
@@ -221,10 +351,17 @@ export const makeWaWebAdapter = ({ modules, logger, onAck }: WaWebAdapterOptions
 		},
 		query: async node => toBinaryNode(modules.readWapNode(await modules.sendIq(toWapNode(node)))),
 		executeUSyncQuery,
+		// both read WA Web's live group model: the "cache" IS the source of truth here, and the core's
+		// fallback must never turn into a wire IQ behind WA Web's back
 		groupMetadata: async jid => {
-			throw new Boom(`wa-web adapter: group metadata for ${jid} is not wired yet`, { statusCode: 501 })
+			const metadata = await readGroupMetadata(jid)
+			if (!metadata) {
+				throw new Boom(`wa-web adapter: WA Web holds no metadata for ${jid}`, { statusCode: 404 })
+			}
+
+			return metadata
 		},
-		cachedGroupMetadata: undefined,
+		cachedGroupMetadata: readGroupMetadata,
 		patchMessageBeforeSending: msg => msg,
 		serverProps: {
 			get privacyTokenOn1to1() {

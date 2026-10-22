@@ -191,13 +191,18 @@ const makeFakeSignalRepository = (): SignalRepositoryWithLIDStore => {
 	return repo as SignalRepositoryWithLIDStore
 }
 
-/** in-memory usync device cache, pre-seeded so no device query ever hits the wire */
+/**
+ * in-memory usync device cache, pre-seeded so no device query ever hits the wire. Holds what a real
+ * fetch would have cached: `extractDeviceJids` drops the socket's own device (ME_DEVICE) from its own
+ * user, so the cache never lists it either and no send ever fans out to itself.
+ */
 const makeDeviceCache = () => {
 	const store = new Map<string, unknown>()
 	for (const [user, { server, devices }] of Object.entries(DEVICES_BY_USER)) {
+		const isMe = user === ME_PN_USER || user === ME_LID_USER
 		store.set(
 			user,
-			devices.map(device => ({ user, server, device }))
+			devices.filter(device => !(isMe && device === ME_DEVICE)).map(device => ({ user, server, device }))
 		)
 	}
 
