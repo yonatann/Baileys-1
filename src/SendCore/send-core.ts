@@ -2,19 +2,6 @@ import { Boom } from '@hapi/boom'
 import type { proto } from '../../WAProto/index.js'
 import type { MessageRelayOptions, WAMessageKey } from '../Types'
 import {
-	encodeSignedDeviceIdentity,
-	encodeWAMessage,
-	extractDeviceJids,
-	generateMessageIDV2,
-	generateParticipantHashV2,
-	normalizeMessageContent,
-	parseAndInjectE2ESessions,
-	resolvePeerRecipientPn,
-	selectLidsForForceRefetch,
-	selectPhashFanoutJids,
-	unixTimestampSeconds
-} from '../Utils'
-import {
 	appendContentBindings,
 	type ContentBindings,
 	getContentBindingSource,
@@ -23,9 +10,23 @@ import {
 	makeContentBindings
 } from '../Utils/content-binding'
 import { shouldHideDecryptFail } from '../Utils/decrypt-fail'
+// Specific-file imports on purpose: the `../Utils` barrel re-exports node-only modules
+// (`auth-utils`→async_hooks, `messages-media`→jimp, `use-multi-file-auth-state`→fs) that the
+// WA Web adapter's browser bundle cannot resolve.
+import {
+	encodeWAMessage,
+	generateMessageIDV2,
+	generateParticipantHashV2,
+	unixTimestampSeconds
+} from '../Utils/generics'
+import { selectPhashFanoutJids } from '../Utils/group-phash-resend'
+import { selectLidsForForceRefetch } from '../Utils/lid-refetch-throttle'
+import { normalizeMessageContent } from '../Utils/message-content'
 import { buildNewsletterMessageNode } from '../Utils/newsletter-stanza'
+import { resolvePeerRecipientPn } from '../Utils/peer-recipient'
 import { getMessageReportingToken, isRevokeMessage, shouldIncludeReportingToken } from '../Utils/reporting-utils'
 import { isPrimaryDeviceJid } from '../Utils/retry-receipt-parity'
+import { extractDeviceJids, parseAndInjectE2ESessions } from '../Utils/signal'
 import {
 	buildMergedTcTokenIndexWrite,
 	isTcTokenExpired,
@@ -34,6 +35,7 @@ import {
 	shouldSendNewTcToken,
 	storeTcTokensFromIqResult
 } from '../Utils/tc-token-utils'
+import { encodeSignedDeviceIdentity } from '../Utils/validate-connection'
 import {
 	areJidsSameUser,
 	type BinaryNode,

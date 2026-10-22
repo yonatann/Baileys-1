@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'crypto'
 import * as curve from 'libsignal/src/curve'
-import { KEY_BUNDLE_TYPE } from '../Defaults'
+import { KEY_BUNDLE_TYPE } from '../Defaults/signal-constants'
 import type { KeyPair } from '../Types'
 export { md5, hkdf } from 'whatsapp-rust-bridge'
 

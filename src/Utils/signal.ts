@@ -1,4 +1,4 @@
-import { KEY_BUNDLE_TYPE } from '../Defaults'
+import { KEY_BUNDLE_TYPE } from '../Defaults/signal-constants'
 import type { SignalRepositoryWithLIDStore } from '../Types'
 import type {
 	AuthenticationCreds,

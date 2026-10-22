@@ -8,7 +8,8 @@ import {
 	type SignalKeyStoreWithTransaction,
 	WAMessageAddressingMode
 } from '../../Types'
-import { DEFAULT_LID_REFETCH_THROTTLE_SEC } from '../../Utils'
+// Specific file, not the `../../Utils` barrel: see send-core.ts.
+import { DEFAULT_LID_REFETCH_THROTTLE_SEC } from '../../Utils/lid-refetch-throttle'
 import type { ILogger } from '../../Utils/logger'
 import { makeKeyedMutex, makeMutex } from '../../Utils/make-mutex'
 import { type BinaryNode, jidDecode, jidEncode, type JidServer } from '../../WABinary'

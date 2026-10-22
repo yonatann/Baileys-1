@@ -1,5 +1,5 @@
 import { proto } from '../../WAProto/index.js'
-import { normalizeMessageContent } from './messages'
+import { normalizeMessageContent } from './message-content'
 
 const HIDDEN_PROTOCOL_TYPES = new Set<proto.Message.ProtocolMessage.Type | null | undefined>([
 	proto.Message.ProtocolMessage.Type.EPHEMERAL_SYNC_RESPONSE,

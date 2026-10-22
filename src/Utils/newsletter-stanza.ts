@@ -2,7 +2,7 @@ import { proto } from '../../WAProto/index.js'
 import type { WAMediaUploadFunction } from '../Types'
 import type { BinaryNode, BinaryNodeAttributes } from '../WABinary'
 import { encodeNewsletterMessage } from './generics'
-import { normalizeMessageContent } from './messages'
+import { normalizeMessageContent } from './message-content'
 
 export type NewsletterStanzaInput = {
 	/** newsletter jid (`...@newsletter`) */
