@@ -38,6 +38,13 @@ export type WaWebSignalModule = {
 			identityKey: Uint8Array
 			signedPreKey: { keyId: number; publicKey: Uint8Array; signature: Uint8Array }
 			preKey?: { keyId: number; publicKey: Uint8Array }
+			/**
+			 * The answer's `<device-identity>` blob, present for companion devices. WA Web's
+			 * `createSignalSession` validates the ADV against `identityKey` and refuses a companion bundle
+			 * without it. Public keys arrive 05-prefixed (33 bytes); WA Web wants the raw 32 and adds the
+			 * prefix itself (`toSignalCurvePubKey`), so the host strips it.
+			 */
+			deviceIdentity?: Uint8Array
 		}
 	): Promise<void>
 	/**
