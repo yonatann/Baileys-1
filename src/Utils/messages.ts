@@ -31,7 +31,7 @@ import { isJidGroup, isJidNewsletter, isJidStatusBroadcast, jidNormalizedUser } 
 import { sha256 } from './crypto'
 import { generateMessageIDV2, getKeyAuthor, unixTimestampSeconds } from './generics'
 import type { ILogger } from './logger'
-import { normalizeMessageContent } from './message-content'
+import { FUTURE_PROOF_WRAPPERS, normalizeMessageContent } from './message-content'
 import {
 	downloadContentFromMessage,
 	encryptedStream,
@@ -43,7 +43,7 @@ import {
 } from './messages-media'
 import { shouldIncludeReportingToken } from './reporting-utils'
 
-export { normalizeMessageContent }
+export { FUTURE_PROOF_WRAPPERS, normalizeMessageContent }
 
 type ExtractByKey<T, K extends PropertyKey> = T extends Record<K, any> ? T : never
 type RequireKey<T, K extends keyof T> = T & {
