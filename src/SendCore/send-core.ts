@@ -22,6 +22,7 @@ import {
 import { selectPhashFanoutJids } from '../Utils/group-phash-resend'
 import { selectLidsForForceRefetch } from '../Utils/lid-refetch-throttle'
 import { normalizeMessageContent } from '../Utils/message-content'
+import { withDerivedMetaNode } from '../Utils/message-meta-node'
 import { buildNewsletterMessageNode } from '../Utils/newsletter-stanza'
 import { resolvePeerRecipientPn } from '../Utils/peer-recipient'
 import { getMessageReportingToken, isRevokeMessage, shouldIncludeReportingToken } from '../Utils/reporting-utils'
@@ -451,7 +452,7 @@ export const buildAndRelay = async (
 		messageId: msgId,
 		participant,
 		additionalAttributes,
-		additionalNodes,
+		additionalNodes: callerNodes,
 		useUserDevicesCache,
 		useCachedGroupMetadata,
 		statusJidList,
@@ -460,6 +461,8 @@ export const buildAndRelay = async (
 	}: MessageRelayOptions
 ) => {
 	const { logger, signal, keys, patchMessageBeforeSending, cachedGroupMetadata, inFlightTcTokenIssuance } = adapter
+	// view-once / poll-vote attrs on the single <meta> node, whoever built the message
+	const additionalNodes = withDerivedMetaNode(callerNodes, message)
 	const getLIDForPN = (pn: string) => signal.lidMapping.getLIDForPN(pn)
 	const me = requireMe(adapter)
 	const meId = me.id
