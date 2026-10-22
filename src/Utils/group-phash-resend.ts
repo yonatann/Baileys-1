@@ -122,7 +122,9 @@ export type GroupFanoutRecord = {
 	/** the same list minus hosted / device 99 / the sender device: WA Web's fan-out list */
 	oldFiltered: string[]
 	addressingMode: string
-	/** the message proto as handed to `buildAndRelay`, encrypted per new device on a resend */
+	/** other attrs of the original `<message>` (`edit`, `expiration`, `addressing_mode`, ...), minus id/to/type/phash */
+	stanzaAttrs: BinaryNodeAttributes
+	/** the group payload after `patchMessageBeforeSending`, encrypted per new device on a resend */
 	message: proto.IMessage
 	/** `mediatype` / `decrypt-fail` attrs the original `<enc>` nodes carried */
 	extraAttrs: BinaryNodeAttributes

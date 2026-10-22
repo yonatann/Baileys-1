@@ -127,6 +127,7 @@ const record = (over: Partial<Parameters<InstanceType<typeof GroupFanoutRecordSt
 	oldAsSent: [OTHER_0, OTHER_1, ME_PRIMARY, ME_COMPANION],
 	oldFiltered: [OTHER_0, OTHER_1, ME_PRIMARY, ME_COMPANION],
 	addressingMode: 'pn',
+	stanzaAttrs: { addressing_mode: 'pn' },
 	message,
 	extraAttrs: {},
 	trailingNodes: [],
@@ -294,6 +295,17 @@ describe('resendGroupMsgToMissingDevices (WAWebResendGroupMsg parity)', () => {
 		expect((h.sent[0]!.content as BinaryNode[]).map(c => c.tag)).toEqual(['participants', 'enc'])
 	})
 
+	it('keeps the original edit attr and does not run the patch hook again', async () => {
+		const h = makeHarness({ usyncDevices: usync })
+		const patch = jest.fn(async (m: proto.IMessage) => m)
+		h.adapter.patchMessageBeforeSending = patch
+		h.records.set(MSG_ID, record({ stanzaAttrs: { addressing_mode: 'pn', edit: '7' } }))
+		await resendGroupMsgToMissingDevices(h.adapter, { msgId: MSG_ID, serverPhash: '2:serverXX', ackTimeMs: nowAck() })
+		expect(h.sent[0]!.attrs.edit).toBe('7')
+		expect(h.sent[0]!.attrs.phash).toBeUndefined()
+		expect(patch).not.toHaveBeenCalled()
+	})
+
 	it('carries media attrs on the marker and the original trailing nodes', async () => {
 		const h = makeHarness({ usyncDevices: usync })
 		const meta: BinaryNode = { tag: 'meta', attrs: { polltype: 'vote' } }
@@ -410,7 +422,8 @@ describe('buildAndRelay records the fan-out for a later mismatch', () => {
 		const stored = h.records.take(MSG_ID)
 		expect(stored?.sentPhash).toBe(sentPhash)
 		expect(stored?.group).toBe(GROUP)
-		expect(stored?.message).toBe(message)
+		expect(stored?.message).toEqual(message)
+		expect(stored?.stanzaAttrs).toEqual({ addressing_mode: 'pn' })
 		// the hash covers the filtered set (no device 99, no sending device) plus the sender
 		expect(stored?.oldAsSent).toContain(`${OTHER_USER}:99@s.whatsapp.net`)
 		expect(stored?.oldFiltered).toEqual([OTHER_0, OTHER_1, ME_PRIMARY, ME_COMPANION])

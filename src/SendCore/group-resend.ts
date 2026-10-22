@@ -173,7 +173,8 @@ export const resendGroupMsgToMissingDevices = async (
 		reachable,
 		record.message,
 		record.extraAttrs,
-		ownAccountMessage
+		ownAccountMessage,
+		{ alreadyPatched: true }
 	)
 
 	const content: BinaryNode[] = [
@@ -195,8 +196,8 @@ export const resendGroupMsgToMissingDevices = async (
 			id: msgId,
 			to: record.group,
 			type: getMessageType(record.message),
-			device_fanout: 'false',
-			addressing_mode: record.addressingMode
+			...record.stanzaAttrs,
+			device_fanout: 'false'
 		},
 		content
 	})
