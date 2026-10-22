@@ -32,6 +32,21 @@ describe('deriveMetaAttrs (WAWebSendMsgMetaNode parity)', () => {
 		expect(isViewOnceMessage({ audioMessage: { viewOnce: true } })).toBe(true)
 	})
 
+	it('derives from the unwrapped message (ephemeral / document-with-caption wrappers)', () => {
+		expect(deriveMetaAttrs({ ephemeralMessage: { message: vote } })).toEqual({ polltype: 'vote' })
+		expect(
+			deriveMetaAttrs({ ephemeralMessage: { message: { viewOnceMessage: { message: { imageMessage: image } } } } })
+		).toEqual({ view_once: 'true' })
+		expect(deriveMetaAttrs({ ephemeralMessage: { message: { imageMessage: { ...image, viewOnce: true } } } })).toEqual({
+			view_once: 'true'
+		})
+	})
+
+	it('view_once is media-only: a view-once wrapper around text or a contact gets none', () => {
+		expect(deriveMetaAttrs({ viewOnceMessage: { message: { conversation: 'hi' } } })).toEqual({})
+		expect(deriveMetaAttrs({ viewOnceMessageV2: { message: { contactMessage: { displayName: 'x' } } } })).toEqual({})
+	})
+
 	it('regular media, viewOnce=false and text carry no view_once (never "false")', () => {
 		expect(deriveMetaAttrs({ imageMessage: image })).toEqual({})
 		expect(deriveMetaAttrs({ imageMessage: { ...image, viewOnce: false } })).toEqual({})

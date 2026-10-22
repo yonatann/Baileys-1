@@ -1,26 +1,45 @@
 import type { proto } from '../../WAProto/index.js'
+import type { WAMessageContent } from '../Types'
 import type { BinaryNode, BinaryNodeAttributes } from '../WABinary'
+import { getFutureProofMessage, normalizeMessageContent, UNWRAP_DEPTH } from './message-content'
 
 /**
  * Attributes of the `<meta>` child WA Web adds to a `<message>` stanza, limited to the ones the
- * fork derives from the message itself. Shapes follow WAWebSendMsgMetaNode (wa-web-dump):
+ * fork derives from the message itself. Shapes follow WAWebSendMsgMetaNode (wa-web-dump), which
+ * derives them from the UNWRAPPED protobuf:
  * - `polltype="vote"` when `pollUpdateMessage.vote` is set
- * - `view_once="true"` when the media is view-once (attribute dropped otherwise, never "false")
+ * - `view_once="true"` for view-once media (attribute dropped otherwise, never "false")
  */
 export type DerivedMetaAttrs = Partial<Record<'polltype' | 'view_once', string>>
 
-const isViewOnceMedia = (message: proto.IMessage): boolean =>
-	message.imageMessage?.viewOnce === true ||
-	message.videoMessage?.viewOnce === true ||
-	message.audioMessage?.viewOnce === true
+const isViewOnceWrapper = (layer: WAMessageContent): boolean =>
+	!!(layer.viewOnceMessage || layer.viewOnceMessageV2 || layer.viewOnceMessageV2Extension)
 
-/** the message is view-once: a view-once wrapper (checked before unwrapping) or a media flag */
-export const isViewOnceMessage = (message: proto.IMessage): boolean => {
-	const wrapper = message.viewOnceMessage ?? message.viewOnceMessageV2 ?? message.viewOnceMessageV2Extension
-	return !!wrapper || isViewOnceMedia(message)
+/** a view-once wrapper anywhere in the wrapper chain (ephemeral > view once > media ...) */
+const hasViewOnceWrapper = (message: WAMessageContent): boolean => {
+	let layer: WAMessageContent | null | undefined = message
+	for (let i = 0; i < UNWRAP_DEPTH && layer; i++) {
+		if (isViewOnceWrapper(layer)) return true
+		layer = getFutureProofMessage(layer)?.message
+	}
+
+	return false
 }
 
-export const isPollVoteMessage = (message: proto.IMessage): boolean => !!message.pollUpdateMessage?.vote
+/**
+ * WA Web sets `view_once` from the media record (`mediaData.isViewOnce`), so only image / video /
+ * audio count: a view-once wrapper (what `sendMessage({ viewOnce: true })` produces) or the media's
+ * own `viewOnce` flag, with a media message inside.
+ */
+export const isViewOnceMessage = (message: proto.IMessage): boolean => {
+	const content = normalizeMessageContent(message)
+	const media = content?.imageMessage ?? content?.videoMessage ?? content?.audioMessage
+	if (!media) return false
+	return media.viewOnce === true || hasViewOnceWrapper(message)
+}
+
+export const isPollVoteMessage = (message: proto.IMessage): boolean =>
+	!!normalizeMessageContent(message)?.pollUpdateMessage?.vote
 
 export const deriveMetaAttrs = (message: proto.IMessage): DerivedMetaAttrs => {
 	const attrs: DerivedMetaAttrs = {}
