@@ -134,7 +134,10 @@ export const extractE2ESessionFromRetryReceipt = (receipt: BinaryNode) => {
 	}
 }
 
-export const parseAndInjectE2ESessions = async (node: BinaryNode, repository: SignalRepositoryWithLIDStore) => {
+export const parseAndInjectE2ESessions = async (
+	node: BinaryNode,
+	repository: Pick<SignalRepositoryWithLIDStore, 'injectE2ESession'>
+) => {
 	const extractKey = (key: BinaryNode) =>
 		key
 			? {
