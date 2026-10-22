@@ -1016,6 +1016,7 @@ export const buildAndRelay = async (
 				stanzaAttrs: Object.fromEntries(
 					Object.entries(stanza.attrs).filter(([k]) => !['id', 'to', 'type', 'phash'].includes(k))
 				),
+				// always set on this path (group branch); the fallback only satisfies the type
 				message: patchedGroupMessage ?? message,
 				extraAttrs: { ...extraAttrs },
 				trailingNodes: [...(reportingNodeSent ? [reportingNodeSent] : []), ...(additionalNodes || [])],

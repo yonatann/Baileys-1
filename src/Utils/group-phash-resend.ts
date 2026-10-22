@@ -157,6 +157,11 @@ export class GroupFanoutRecordStore {
 		}
 	}
 
+	/** Read without consuming (tests / diagnostics). */
+	peek(msgId: string): GroupFanoutRecord | undefined {
+		return this.records.get(msgId)
+	}
+
 	/** Returns and deletes synchronously: the once-per-message guard. */
 	take(msgId: string): GroupFanoutRecord | undefined {
 		const record = this.records.get(msgId)

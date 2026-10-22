@@ -429,3 +429,50 @@ describe('buildAndRelay records the fan-out for a later mismatch', () => {
 		expect(stored?.oldFiltered).toEqual([OTHER_0, OTHER_1, ME_PRIMARY, ME_COMPANION])
 	})
 })
+
+describe('the stored payload is the patched one', () => {
+	it('records the hook output and a resend encrypts it without running the hook again', async () => {
+		const h = makeHarness({ usyncDevices: { [OTHER_0]: [0, 1, 2], [ME_PRIMARY]: [0, 3, 7] } })
+		const patch = jest.fn(
+			async (m: proto.IMessage): Promise<proto.IMessage> => ({ ...m, conversation: 'patched text' })
+		)
+		h.adapter.patchMessageBeforeSending = patch as GroupResendAdapter['patchMessageBeforeSending']
+		h.adapter.signal.encryptGroupMessage = async () => ({
+			senderKeyDistributionMessage: new Uint8Array([1]),
+			ciphertext: new Uint8Array([2])
+		})
+		h.adapter.groupMetadata = async () =>
+			({
+				id: GROUP,
+				addressingMode: 'pn',
+				participants: [{ id: OTHER_0 }, { id: ME_PRIMARY }]
+			}) as unknown as GroupMetadata
+		// the original send sees only OTHER_0:[0,1]; device 2 is the one the server knows about
+		h.adapter.executeUSyncQuery = async () =>
+			({
+				list: [
+					{ id: OTHER_0, devices: { deviceList: [{ id: 0 }, { id: 1, keyIndex: 1 }] } },
+					{ id: ME_PRIMARY, devices: { deviceList: [{ id: 0 }, { id: 3, keyIndex: 1 }, { id: 7, keyIndex: 1 }] } }
+				]
+			}) as unknown as USyncQueryResult
+		await buildAndRelay(h.adapter, GROUP, message, { messageId: MSG_ID, useUserDevicesCache: false })
+		expect(h.records.peek(MSG_ID)?.message.conversation).toBe('patched text')
+		const callsAfterSend = patch.mock.calls.length
+
+		h.adapter.executeUSyncQuery = async () =>
+			({
+				list: [
+					{ id: OTHER_0, devices: { deviceList: [{ id: 0 }, { id: 1, keyIndex: 1 }, { id: 2, keyIndex: 1 }] } },
+					{ id: ME_PRIMARY, devices: { deviceList: [{ id: 0 }, { id: 3, keyIndex: 1 }, { id: 7, keyIndex: 1 }] } }
+				]
+			}) as unknown as USyncQueryResult
+		const out = await resendGroupMsgToMissingDevices(h.adapter, {
+			msgId: MSG_ID,
+			serverPhash: '2:serverXX',
+			ackTimeMs: nowAck()
+		})
+		expect(out).toEqual({ status: 'resent', devices: [OTHER_2] })
+		expect(h.encrypted.at(-1)?.message.conversation).toBe('patched text')
+		expect(patch.mock.calls.length).toBe(callsAfterSend)
+	})
+})
