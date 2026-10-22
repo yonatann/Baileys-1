@@ -6,7 +6,7 @@ import {
 	WA_ADV_ACCOUNT_SIG_PREFIX,
 	WA_ADV_DEVICE_SIG_PREFIX,
 	WA_ADV_HOSTED_ACCOUNT_SIG_PREFIX
-} from '../Defaults'
+} from '../Defaults/signal-constants'
 import type { AuthenticationCreds, SignalCreds, SocketConfig } from '../Types'
 import { type BinaryNode, getBinaryNodeChild, jidDecode, S_WHATSAPP_NET } from '../WABinary'
 import { Curve, hmacSign } from './crypto'
