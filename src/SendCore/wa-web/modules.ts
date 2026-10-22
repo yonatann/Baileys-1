@@ -40,6 +40,28 @@ export type WaWebSignalModule = {
 			preKey?: { keyId: number; publicKey: Uint8Array }
 		}
 	): Promise<void>
+	/**
+	 * `WAWebSignal.Cipher.encryptSenderKeyMsgSignalProto(groupWid, meDeviceWid, paddedBytes)`: the skmsg
+	 * ciphertext plus the raw axolotl sender-key distribution message for `meDeviceWid`'s key in that group
+	 * (generates the key when there is none yet). `groupWid` is a group or `status@broadcast`.
+	 */
+	encryptSenderKeyMsgSignalProto(
+		group: WaWid,
+		me: WaWid,
+		data: Uint8Array
+	): Promise<{ ciphertext: Uint8Array; senderKeyBytes: Uint8Array }>
+	/** `WAWebSignal.Session.deleteGroupSenderKeyInfo(groupWid, meDeviceWid)`: drop the key so the next encrypt makes a fresh one. */
+	deleteGroupSenderKeyInfo(group: WaWid, me: WaWid): Promise<void>
+}
+
+/** The slice of a `WAWebGroupMetadataCollection` model the send core reads. */
+export type WaWebGroupMetadata = {
+	/** member user Wids, in the group's addressing mode (`lid` members for a lid group) */
+	participants: WaWid[]
+	/** `isLidAddressingMode` */
+	addressingMode: 'pn' | 'lid'
+	/** disappearing-messages timer in seconds, when on */
+	ephemeralDuration?: number
 }
 
 export type WaWebModules = {
@@ -70,6 +92,20 @@ export type WaWebModules = {
 	getDeviceIds(
 		wids: WaWid[]
 	): Promise<{ wid: WaWid; devices: { id: number; keyIndex?: number; isHosted?: boolean }[] }[]>
+	/** `WAWebGroupMetadataCollection.get(groupWid)`: WA Web's live group model, or undefined when it holds none. Never a wire IQ. */
+	groupMetadata(group: WaWid): Promise<WaWebGroupMetadata | undefined>
+	/**
+	 * Group sender-key bookkeeping = WA Web's participant table (`WAWebApiParticipantStore`): which member
+	 * devices already hold our sender key for the group, and `rotateKey`, which WA Web raises when a member
+	 * left so the next send must rotate the key (`encryptAndSendSenderKeyMsg` deletes it before encrypting).
+	 * WA Web never fans out to the account's own devices, so `keyed` never lists them and `markHasSenderKey`
+	 * is only ever called for other users' devices; the adapter keeps own-device bookkeeping itself.
+	 */
+	senderKeys: {
+		get(group: WaWid): Promise<{ keyed: WaWid[]; rotateKey: boolean }>
+		/** `WAWebApiParticipantStore.markHasSenderKey(groupWid, deviceWids)`, called once the server acked the send. */
+		markHasSenderKey(group: WaWid, devices: WaWid[]): Promise<void>
+	}
 	/** `WAWebLidPnCache` / `WAWebApiContact.getAlternateDeviceWid`: the other addressing of a user Wid, or null. */
 	lidForPn(pn: WaWid): WaWid | null
 	pnForLid(lid: WaWid): WaWid | null
