@@ -1,4 +1,3 @@
-import type NodeCache from '@cacheable/node-cache'
 import type { proto } from '../../WAProto/index.js'
 import type {
 	GroupMetadata,
@@ -8,6 +7,7 @@ import type {
 	SignalRepository,
 	SocketConfig
 } from '../Types'
+import type { LidRefetchThrottleStore } from '../Utils/lid-refetch-throttle'
 import type { ILogger } from '../Utils/logger'
 import type { KeyedMutex, Mutex } from '../Utils/make-mutex'
 import type { MessageRetryManager } from '../Utils/message-retry-manager'
@@ -74,12 +74,12 @@ export type SendCoreAdapter = {
 	patchMessageBeforeSending: SocketConfig['patchMessageBeforeSending']
 	serverProps: SendCoreServerProps
 
-	/** Same union the socket holds: a user-supplied store or the default in-memory NodeCache. */
-	userDevicesCache: PossiblyExtendedCacheStore | NodeCache<JidWithDevice[]>
+	/** Structural device cache: the socket passes a user-supplied store or its default in-memory NodeCache. */
+	userDevicesCache: PossiblyExtendedCacheStore
 	/** Serializes writes to userDevicesCache across USync refresh and device-notification handling. */
 	devicesMutex: Mutex
 	/** Per-LID cooldown for the identity force-refetch on newly-mapped LIDs (D3 / BE#660). */
-	lidForceRefetchThrottle: NodeCache<boolean>
+	lidForceRefetchThrottle: LidRefetchThrottleStore
 	/** Prevents race conditions in Signal session encryption by user. */
 	encryptionMutex: KeyedMutex
 	/**

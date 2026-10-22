@@ -1,4 +1,3 @@
-import NodeCache from '@cacheable/node-cache'
 import { Boom } from '@hapi/boom'
 import {
 	type GroupMetadata,
@@ -9,7 +8,7 @@ import {
 	WAMessageAddressingMode
 } from '../../Types'
 // Specific file, not the `../../Utils` barrel: see send-core.ts.
-import { DEFAULT_LID_REFETCH_THROTTLE_SEC } from '../../Utils/lid-refetch-throttle'
+import { createTtlThrottleStore, DEFAULT_LID_REFETCH_THROTTLE_SEC } from '../../Utils/lid-refetch-throttle'
 import type { ILogger } from '../../Utils/logger'
 import { makeKeyedMutex, makeMutex } from '../../Utils/make-mutex'
 import { type BinaryNode, jidDecode, jidEncode, type JidServer } from '../../WABinary'
@@ -376,7 +375,7 @@ export const makeWaWebAdapter = ({ modules, logger, onAck }: WaWebAdapterOptions
 		// would go stale against it, so every send asks WA Web (getDeviceIds) and nothing is cached.
 		userDevicesCache: noDeviceCache,
 		devicesMutex: makeMutex(),
-		lidForceRefetchThrottle: new NodeCache<boolean>({ stdTTL: DEFAULT_LID_REFETCH_THROTTLE_SEC, useClones: false }),
+		lidForceRefetchThrottle: createTtlThrottleStore(DEFAULT_LID_REFETCH_THROTTLE_SEC),
 		encryptionMutex: makeKeyedMutex(),
 		inFlightTcTokenIssuance: new Set<string>(),
 		messageRetryManager: null
