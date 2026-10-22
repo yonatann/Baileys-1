@@ -350,6 +350,8 @@ export const createParticipantNodes = async (
 		 * sender-key encryption fails but rejects the whole send when a PRIMARY device fails.
 		 */
 		rejectOnPrimaryDeviceFailure?: boolean
+		/** `message` already went through `patchMessageBeforeSending`; do not run the hook again (group resend) */
+		alreadyPatched?: boolean
 	}
 ) => {
 	const { logger, signal, encryptionMutex } = adapter
@@ -357,7 +359,7 @@ export const createParticipantNodes = async (
 		return { nodes: [] as BinaryNode[], shouldIncludeDeviceIdentity: false }
 	}
 
-	const patched = await adapter.patchMessageBeforeSending(message, recipientJids)
+	const patched = opts?.alreadyPatched ? message : await adapter.patchMessageBeforeSending(message, recipientJids)
 	const patchedMessages = Array.isArray(patched)
 		? patched
 		: recipientJids.map(jid => ({ recipientJid: jid, message: patched }))
@@ -485,6 +487,8 @@ export const buildAndRelay = async (
 	const binaryNodeContent: BinaryNode[] = []
 	const devices: DeviceWithJid[] = []
 	let reportingMessage: proto.IMessage | undefined
+	/** group payload after `patchMessageBeforeSending`: what the sender-key ciphertext was built from */
+	let patchedGroupMessage: proto.IMessage | undefined
 
 	const meMsg: proto.IMessage = {
 		deviceSentMessage: {
@@ -593,6 +597,7 @@ export const buildAndRelay = async (
 
 			const bytes = encodeWAMessage(patched)
 			reportingMessage = patched
+			patchedGroupMessage = patched
 			const groupAddressingMode = additionalAttributes?.['addressing_mode'] || groupData?.addressingMode || 'pn'
 			const groupSenderIdentity = groupAddressingMode === 'lid' && meLid ? meLid : meId
 			if (contentBindingSource) {
@@ -932,6 +937,7 @@ export const buildAndRelay = async (
 			reportingMessage = reportingMessageOverride
 		}
 
+		let reportingNodeSent: BinaryNode | undefined
 		if (
 			!isNewsletter &&
 			!isRetryResend &&
@@ -949,6 +955,7 @@ export const buildAndRelay = async (
 				}
 				const reportingNode = await getMessageReportingToken(encoded, reportingMessage, reportingKey)
 				if (reportingNode) {
+					reportingNodeSent = reportingNode
 					;(stanza.content as BinaryNode[]).push(reportingNode)
 					logger.trace({ jid }, 'added reporting token to message')
 				}
@@ -996,6 +1003,26 @@ export const buildAndRelay = async (
 		}
 
 		logger.debug({ msgId }, `sending message to ${participants.length} devices`)
+
+		// A server phash mismatch comes back on the <ack>; keep what a WA Web-style resend to the missing
+		// devices needs (consumed once, see `resendGroupMsgToMissingDevices`).
+		if (isGroup && !participant && adapter.groupFanoutRecords && stanza.attrs.phash) {
+			adapter.groupFanoutRecords.set(msgId, {
+				group: destinationJid,
+				sentPhash: stanza.attrs.phash,
+				oldAsSent: devices.map(d => d.jid),
+				oldFiltered: selectPhashFanoutJids(devices, meId, meLid),
+				addressingMode: stanza.attrs.addressing_mode || 'pn',
+				stanzaAttrs: Object.fromEntries(
+					Object.entries(stanza.attrs).filter(([k]) => !['id', 'to', 'type', 'phash'].includes(k))
+				),
+				// always set on this path (group branch); the fallback only satisfies the type
+				message: patchedGroupMessage ?? message,
+				extraAttrs: { ...extraAttrs },
+				trailingNodes: [...(reportingNodeSent ? [reportingNodeSent] : []), ...(additionalNodes || [])],
+				sentAt: Date.now()
+			})
+		}
 
 		await adapter.sendNode(stanza)
 

@@ -4,6 +4,7 @@ import { proto } from '../../WAProto/index.js'
 import { DEFAULT_CACHE_TTLS, WA_DEFAULT_EPHEMERAL } from '../Defaults'
 import type { SendCoreAdapter } from '../SendCore'
 import * as sendCore from '../SendCore'
+import { GroupFanoutRecordStore } from '../Utils/group-phash-resend'
 import type {
 	AnyMessageContent,
 	MediaConnInfo,
@@ -114,6 +115,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 	 * websocket, signal store and auth state. The state objects above are shared with the rest of the
 	 * socket (device notifications, retry receipts) through the returned socket surface as before.
 	 */
+	const groupFanoutRecords = new GroupFanoutRecordStore()
+
 	const adapter: SendCoreAdapter = {
 		logger,
 		me: () => authState.creds.me,
@@ -132,6 +135,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		lidForceRefetchThrottle,
 		encryptionMutex,
 		inFlightTcTokenIssuance,
+		groupFanoutRecords,
 		messageRetryManager
 	}
 
@@ -343,7 +347,20 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		if (messageRetryManager) {
 			messageRetryManager.clear()
 		}
+
+		groupFanoutRecords.clear()
 	})
+
+	/** WA Web `resendGroupMsg` for a group `<ack phash>` mismatch, see `SendCore/group-resend`. */
+	const resendGroupMsgToMissingDevices = (opts: { msgId: string; serverPhash: string; ackTimeMs: number }) =>
+		sendCore.resendGroupMsgToMissingDevices(
+			{
+				...adapter,
+				sessionRegistrationId: async jid => (await signalRepository.getSessionInfo(jid))?.registrationId,
+				localRegistrationId: () => authState.creds.registrationId
+			},
+			opts
+		)
 
 	return {
 		...sock,
@@ -352,6 +369,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		issuePrivacyTokens,
 		assertSessions,
 		relayMessage,
+		resendGroupMsgToMissingDevices,
 		sendReceipt,
 		sendReceipts,
 		readMessages,
