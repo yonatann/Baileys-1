@@ -1,5 +1,3 @@
-import type NodeCache from '@cacheable/node-cache'
-
 /**
  * Default per-LID cooldown (seconds) for the identity force-refetch throttle.
  *
@@ -9,6 +7,64 @@ import type NodeCache from '@cacheable/node-cache'
  * multi-device / large-group churn. It does not mask a genuine identity change.
  */
 export const DEFAULT_LID_REFETCH_THROTTLE_SEC = 300
+
+/**
+ * The only two operations the throttle needs from its backing store. Structural on purpose:
+ * the Baileys socket still passes a `NodeCache<boolean>` (which satisfies this), while the
+ * WA Web adapter passes `createTtlThrottleStore` so the extension bundle does not have to
+ * carry `@cacheable/node-cache`.
+ */
+export type LidRefetchThrottleStore = {
+	get(key: string): boolean | undefined
+	set(key: string, value: boolean): unknown
+}
+
+/** Drop expired entries once the map holds at least this many, so it cannot grow without bound. */
+const TTL_STORE_SWEEP_THRESHOLD = 1000
+
+/**
+ * Minimal dependency-free TTL store for the throttle: an entry is readable for `ttlSec` seconds
+ * after it was last `set`, then reads as missing (same semantics as `NodeCache` with `stdTTL`).
+ * `now` is injectable for tests.
+ */
+export function createTtlThrottleStore(ttlSec: number, now: () => number = Date.now): LidRefetchThrottleStore {
+	const expiresAt = new Map<string, number>()
+	const ttlMs = ttlSec * 1000
+
+	return {
+		get(key) {
+			const expiry = expiresAt.get(key)
+			if (expiry === undefined) {
+				return undefined
+			}
+
+			if (expiry <= now()) {
+				expiresAt.delete(key)
+				return undefined
+			}
+
+			return true
+		},
+		set(key, value) {
+			if (!value) {
+				expiresAt.delete(key)
+				return true
+			}
+
+			const t = now()
+			if (expiresAt.size >= TTL_STORE_SWEEP_THRESHOLD) {
+				for (const [k, expiry] of expiresAt) {
+					if (expiry <= t) {
+						expiresAt.delete(k)
+					}
+				}
+			}
+
+			expiresAt.set(key, t + ttlMs)
+			return true
+		}
+	}
+}
 
 export type LidRefetchSelection = {
 	/** LIDs that should be force-refetched now (not seen within the throttle window). */
@@ -29,7 +85,7 @@ export type LidRefetchSelection = {
  * force-refetched within the throttle window (tracked in `throttleCache`, TTL = window). Selected
  * LIDs are marked in the cache. Input is deduped; order is preserved.
  */
-export function selectLidsForForceRefetch(lids: string[], throttleCache: NodeCache<boolean>): LidRefetchSelection {
+export function selectLidsForForceRefetch(lids: string[], throttleCache: LidRefetchThrottleStore): LidRefetchSelection {
 	const toRefetch: string[] = []
 	const throttled: string[] = []
 	const seen = new Set<string>()

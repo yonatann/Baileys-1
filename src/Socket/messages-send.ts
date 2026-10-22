@@ -10,6 +10,7 @@ import type {
 	MessageReceiptType,
 	MessageRelayOptions,
 	MiscMessageGenerationOptions,
+	PossiblyExtendedCacheStore,
 	SocketConfig,
 	WAMessage,
 	WAMessageKey
@@ -127,7 +128,9 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		cachedGroupMetadata,
 		patchMessageBeforeSending,
 		serverProps: sock.serverProps,
-		userDevicesCache,
+		// The adapter takes the structural store type. The default NodeCache<JidWithDevice[]> is that
+		// store; only the generic `get<T>` signature stops TS from seeing it, so this is a type-only cast.
+		userDevicesCache: userDevicesCache as PossiblyExtendedCacheStore,
 		devicesMutex,
 		lidForceRefetchThrottle,
 		encryptionMutex,
