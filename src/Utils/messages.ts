@@ -806,6 +806,14 @@ export const generateWAMessage = async (jid: string, content: AnyMessageContent,
 }
 
 /** Get the key to access the true type of content */
+/**
+ * A reaction REMOVAL: WA Web WAWebSendMsgCommonApi.editAttribute (b006) stamps
+ * `edit=7` (WAWebAck.EDIT_ATTR.SENDER_REVOKE) on a reaction whose text equals
+ * WAWebDBGetReactions.REVOKED_REACTION_TEXT, the empty string (b007).
+ */
+export const isReactionRevoke = (message: proto.IMessage | null | undefined) =>
+	normalizeMessageContent(message)?.reactionMessage?.text === ''
+
 export const getContentType = (content: proto.IMessage | undefined) => {
 	if (content) {
 		const keys = Object.keys(content)

@@ -31,6 +31,7 @@ import {
 	getStatusCodeForMediaRetry,
 	getUrlFromDirectPath,
 	getWAUploadToServer,
+	isReactionRevoke,
 	MessageRetryManager,
 	normalizeMessageContent,
 	parseAndInjectE2ESessions,
@@ -1516,6 +1517,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 					additionalAttributes.edit = '1'
 				} else if (isPinMsg) {
 					additionalAttributes.edit = '2'
+				} else if (isReactionRevoke(fullMsg.message)) {
+					additionalAttributes.edit = '7'
 				} else if (isPollMessage) {
 					additionalNodes.push({
 						tag: 'meta',
