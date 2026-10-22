@@ -162,7 +162,7 @@ const makeStubModules = () => {
 		},
 		abProps: () => ({ privacyTokenOn1to1: true, lidTrustedTokenIssueToLid: false })
 	}
-	return { modules, sent, iqs }
+	return { modules, sent, iqs, tokens }
 }
 
 const FIXTURE_PATH = join(
@@ -403,6 +403,77 @@ describe('wa-web adapter', () => {
 		expect((stanza.attrs.to as WaWid).toString()).toBe(OTHER_LID)
 		expect(isWid(stanza.attrs.peer_recipient_pn)).toBe(true)
 		expect((stanza.attrs.peer_recipient_pn as WaWid).toString()).toBe(`${OTHER_PN_USER}@c.us`)
+	})
+
+	it('issues our tctoken once after a send when WA Web holds none with a senderTimestamp', async () => {
+		const { modules, sent, iqs, tokens } = makeStubModules()
+		// the contact's token is there (so <tctoken> attaches) but we never issued ours
+		tokens.set(OTHER_LID, { token: TC_TOKEN, timestamp: String(NOW_SEC) })
+		modules.sendIq = async stanza => {
+			iqs.push(stanza)
+			const tokenNodes = (stanza.content as WaWapNode[])[0]!.content as WaWapNode[]
+			return {
+				tag: 'iq',
+				attrs: { type: 'result', from: makeWid('@s.whatsapp.net') },
+				content: [
+					{
+						tag: 'tokens',
+						attrs: {},
+						content: tokenNodes.map(t => ({
+							tag: 'token',
+							attrs: { jid: t.attrs.jid!, t: t.attrs.t!, type: 'trusted_contact' },
+							content: Buffer.alloc(16, 0xee)
+						}))
+					}
+				]
+			}
+		}
+
+		const adapter = makeWaWebAdapter({ modules, logger: logger.child({}, { level: 'silent' }) })
+		await buildAndRelay(adapter, OTHER_PN, text('first of the week'), { messageId: 'SNAP0001' })
+		expect(sent).toHaveLength(1)
+
+		// the issuance runs fire-and-forget after sendNode; wait for it to land
+		for (let i = 0; i < 50 && !tokens.get(OTHER_LID)?.senderTimestamp; i++) {
+			await new Promise(r => setTimeout(r, 5))
+		}
+
+		expect(iqs).toHaveLength(1)
+		const iq = iqs[0]!
+		expect(iq.attrs.xmlns).toBe('privacy')
+		expect(iq.attrs.type).toBe('set')
+		expect((iq.attrs.to as WaWid).toString()).toBe('@s.whatsapp.net')
+		const token = ((iq.content as WaWapNode[])[0]!.content as WaWapNode[])[0]!
+		expect(token.attrs.type).toBe('trusted_contact')
+		expect((token.attrs.jid as WaWid).toString()).toBe(`${OTHER_PN_USER}@c.us`)
+
+		// the whole chain completed: WA Web's store now carries our senderTimestamp, and the core's own
+		// `__index` bookkeeping row (not a jid) stayed inside the adapter instead of reaching WA Web
+		expect(tokens.get(OTHER_LID)?.senderTimestamp).toBeGreaterThan(0)
+		expect([...tokens.keys()].every(k => k.includes('@'))).toBe(true)
+		const index = await adapter.keys.get('tctoken', ['__index'])
+		expect(JSON.parse(Buffer.from(index['__index']!.token).toString())).toEqual([OTHER_LID])
+
+		// a second send in the same bucket issues nothing
+		await buildAndRelay(adapter, OTHER_PN, text('second of the week'), { messageId: 'SNAP0001' })
+		await new Promise(r => setTimeout(r, 20))
+		expect(iqs).toHaveLength(1)
+		expect(sent).toHaveLength(2)
+	})
+
+	it('swallows an onAck listener fault after the stanza went out', async () => {
+		const { modules, sent } = makeStubModules()
+		const adapter = makeWaWebAdapter({
+			modules,
+			logger: logger.child({}, { level: 'silent' }),
+			onAck: () => {
+				throw new Error('listener bug')
+			}
+		})
+		await expect(buildAndRelay(adapter, OTHER_PN, text('still fine'), { messageId: 'SNAP0001' })).resolves.toBe(
+			'SNAP0001'
+		)
+		expect(sent).toHaveLength(1)
 	})
 
 	it('refuses group sends until sender keys are wired', async () => {

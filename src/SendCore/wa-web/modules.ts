@@ -62,9 +62,14 @@ export type WaWebModules = {
 	signal: WaWebSignalModule
 	/**
 	 * `WAWebApiDeviceList.getDeviceIds(wids)` / `bulkGetDeviceRecord` (confirmed via `getFanOutList`): the device
-	 * records per user Wid. `id` 0 is the primary; companions carry the `keyIndex` WA Web stores for them.
+	 * records per user Wid. `id` 0 is the primary; companions carry the `keyIndex` WA Web stores for them;
+	 * hosted (business-platform) devices set `isHosted`. The answer's `wid` is the address WA Web itself would
+	 * fan out to: when it holds a LID mapping for a PN wid it answers under the LID wid, the way the Baileys
+	 * socket gets a `lid` back from usync. The adapter passes that address through unchanged.
 	 */
-	getDeviceIds(wids: WaWid[]): Promise<{ wid: WaWid; devices: { id: number; keyIndex?: number }[] }[]>
+	getDeviceIds(
+		wids: WaWid[]
+	): Promise<{ wid: WaWid; devices: { id: number; keyIndex?: number; isHosted?: boolean }[] }[]>
 	/** `WAWebLidPnCache` / `WAWebApiContact.getAlternateDeviceWid`: the other addressing of a user Wid, or null. */
 	lidForPn(pn: WaWid): WaWid | null
 	pnForLid(lid: WaWid): WaWid | null

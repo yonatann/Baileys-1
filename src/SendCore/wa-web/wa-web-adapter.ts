@@ -1,11 +1,15 @@
 import NodeCache from '@cacheable/node-cache'
 import { Boom } from '@hapi/boom'
-import { DEFAULT_CACHE_TTLS } from '../../Defaults'
-import type { SignalDataSet, SignalDataTypeMap, SignalKeyStoreWithTransaction } from '../../Types'
+import type {
+	PossiblyExtendedCacheStore,
+	SignalDataSet,
+	SignalDataTypeMap,
+	SignalKeyStoreWithTransaction
+} from '../../Types'
 import { DEFAULT_LID_REFETCH_THROTTLE_SEC } from '../../Utils'
 import type { ILogger } from '../../Utils/logger'
 import { makeKeyedMutex, makeMutex } from '../../Utils/make-mutex'
-import { type BinaryNode, jidDecode, jidEncode, type JidServer, type JidWithDevice } from '../../WABinary'
+import { type BinaryNode, jidDecode, jidEncode, type JidServer } from '../../WABinary'
 import type { USyncQuery, USyncQueryResult, USyncQueryResultList } from '../../WAUSync'
 import type { SendCoreAdapter, SendCoreSignal } from '../types'
 import type { WaWapNode, WaWebModules, WaWid } from './modules'
@@ -48,6 +52,13 @@ export const makeJidToWid =
 const isWid = (value: unknown): value is WaWid =>
 	typeof value === 'object' && value !== null && 'user' in value && 'server' in value
 
+const noDeviceCache: PossiblyExtendedCacheStore = {
+	get: () => undefined,
+	set: () => {},
+	del: () => {},
+	flushAll: () => {}
+}
+
 export type WaWebAdapterOptions = {
 	modules: WaWebModules
 	logger: ILogger
@@ -79,13 +90,16 @@ export const makeWaWebAdapter = ({ modules, logger, onAck }: WaWebAdapterOptions
 		return { tag: node.tag, attrs, content }
 	}
 
-	// In-memory store for the key types the send core touches; tctoken reads through to WA Web.
+	// In-memory store for the key types the send core touches; tctoken reads through to WA Web for
+	// jid-keyed entries. The core also keeps a bookkeeping row under `TC_TOKEN_INDEX_KEY` (`__index`,
+	// the list of jids it has tokens for); that is not a jid and stays in memory with the rest.
 	const memory: { [T in keyof SignalDataTypeMap]?: { [id: string]: SignalDataTypeMap[T] } } = {}
+	const isWaWebToken = (type: keyof SignalDataTypeMap, id: string) => type === 'tctoken' && !!jidDecode(id)
 	const keys: SignalKeyStoreWithTransaction = {
 		async get(type, ids) {
 			const out: { [id: string]: SignalDataTypeMap[typeof type] } = {}
 			for (const id of ids) {
-				if (type === 'tctoken') {
+				if (isWaWebToken(type, id)) {
 					const entry = await modules.tcToken.get(jidToWid(id))
 					if (entry) {
 						out[id] = { ...entry, token: Buffer.from(entry.token) } as SignalDataTypeMap[typeof type]
@@ -107,7 +121,7 @@ export const makeWaWebAdapter = ({ modules, logger, onAck }: WaWebAdapterOptions
 				const entries = data[type]
 				if (!entries) continue
 				for (const [id, value] of Object.entries(entries)) {
-					if (type === 'tctoken') {
+					if (isWaWebToken(type, id)) {
 						await modules.tcToken.set(jidToWid(id), value as SignalDataTypeMap['tctoken'] | null)
 						continue
 					}
@@ -174,7 +188,7 @@ export const makeWaWebAdapter = ({ modules, logger, onAck }: WaWebAdapterOptions
 		const records = await modules.getDeviceIds(ids.map(jidToWid))
 		const list: USyncQueryResultList[] = records.map(({ wid, devices }) => ({
 			id: widToJid(wid),
-			devices: { deviceList: devices.map(d => ({ id: d.id, keyIndex: d.keyIndex })) }
+			devices: { deviceList: devices.map(d => ({ id: d.id, keyIndex: d.keyIndex, isHosted: d.isHosted })) }
 		}))
 		return { list, sideList: [] }
 	}
@@ -198,7 +212,12 @@ export const makeWaWebAdapter = ({ modules, logger, onAck }: WaWebAdapterOptions
 				toWapNode(node),
 				modules.makeAckTemplate({ id: node.attrs.id, cls: 'message', from: jidToWid(to) })
 			)
-			onAck?.(node.attrs.id, ack)
+			// the stanza is on the wire by now: a listener fault must not surface as a failed send
+			try {
+				onAck?.(node.attrs.id, ack)
+			} catch (err) {
+				logger.warn({ id: node.attrs.id, err }, 'wa-web adapter: onAck listener threw')
+			}
 		},
 		query: async node => toBinaryNode(modules.readWapNode(await modules.sendIq(toWapNode(node)))),
 		executeUSyncQuery,
@@ -215,7 +234,9 @@ export const makeWaWebAdapter = ({ modules, logger, onAck }: WaWebAdapterOptions
 				return modules.abProps().lidTrustedTokenIssueToLid
 			}
 		},
-		userDevicesCache: new NodeCache<JidWithDevice[]>({ stdTTL: DEFAULT_CACHE_TTLS.USER_DEVICES, useClones: false }),
+		// WA Web keeps the device list current from its own device notifications; a private copy here
+		// would go stale against it, so every send asks WA Web (getDeviceIds) and nothing is cached.
+		userDevicesCache: noDeviceCache,
 		devicesMutex: makeMutex(),
 		lidForceRefetchThrottle: new NodeCache<boolean>({ stdTTL: DEFAULT_LID_REFETCH_THROTTLE_SEC, useClones: false }),
 		encryptionMutex: makeKeyedMutex(),
