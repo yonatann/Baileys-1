@@ -139,6 +139,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		assertSessions,
 		sendNode,
 		relayMessage,
+		resendGroupMsgToMissingDevices,
 		sendReceipt,
 		uploadPreKeys,
 		digestKeyBundle,
@@ -1894,19 +1895,14 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 			)
 		}
 
-		// WARNING: REFRAIN FROM ENABLING THIS FOR NOW. IT WILL CAUSE A LOOP
-		// // current hypothesis is that if pash is sent in the ack
-		// // it means -- the message hasn't reached all devices yet
-		// // we'll retry sending the message here
-		// if(attrs.phash) {
-		// 	logger.info({ attrs }, 'received phash in ack, resending message...')
-		// 	const msg = await getMessage(key)
-		// 	if(msg) {
-		// 		await relayMessage(key.remoteJid!, msg, { messageId: key.id!, useUserDevicesCache: false })
-		// 	} else {
-		// 		logger.warn({ attrs }, 'could not send message again, as it was not found')
-		// 	}
-		// }
+		// WA Web parity (`WAWebSendGroupSkmsgJob`): a group ack whose phash differs from the one we sent
+		// means the fan-out missed devices; resend to the missing ones. Cannot loop: the stored fan-out
+		// record is consumed on the first ack, and the resend stanza carries no phash to be answered with.
+		if (attrs.phash && !attrs.error && attrs.id && attrs.from && isJidGroup(attrs.from)) {
+			resendGroupMsgToMissingDevices({ msgId: attrs.id, serverPhash: attrs.phash, ackTimeMs: Date.now() }).catch(err =>
+				logger.warn({ msgId: attrs.id, err: (err as Error).message }, 'group phash resend failed')
+			)
+		}
 
 		// error in acknowledgement,
 		// device could not display the message

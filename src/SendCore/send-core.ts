@@ -932,6 +932,7 @@ export const buildAndRelay = async (
 			reportingMessage = reportingMessageOverride
 		}
 
+		let reportingNodeSent: BinaryNode | undefined
 		if (
 			!isNewsletter &&
 			!isRetryResend &&
@@ -949,6 +950,7 @@ export const buildAndRelay = async (
 				}
 				const reportingNode = await getMessageReportingToken(encoded, reportingMessage, reportingKey)
 				if (reportingNode) {
+					reportingNodeSent = reportingNode
 					;(stanza.content as BinaryNode[]).push(reportingNode)
 					logger.trace({ jid }, 'added reporting token to message')
 				}
@@ -996,6 +998,22 @@ export const buildAndRelay = async (
 		}
 
 		logger.debug({ msgId }, `sending message to ${participants.length} devices`)
+
+		// A server phash mismatch comes back on the <ack>; keep what a WA Web-style resend to the missing
+		// devices needs (consumed once, see `resendGroupMsgToMissingDevices`).
+		if (isGroup && !participant && adapter.groupFanoutRecords && stanza.attrs.phash) {
+			adapter.groupFanoutRecords.set(msgId, {
+				group: destinationJid,
+				sentPhash: stanza.attrs.phash,
+				oldAsSent: devices.map(d => d.jid),
+				oldFiltered: selectPhashFanoutJids(devices, meId, meLid),
+				addressingMode: stanza.attrs.addressing_mode || 'pn',
+				message,
+				extraAttrs: { ...extraAttrs },
+				trailingNodes: [...(reportingNodeSent ? [reportingNodeSent] : []), ...(additionalNodes || [])],
+				sentAt: Date.now()
+			})
+		}
 
 		await adapter.sendNode(stanza)
 

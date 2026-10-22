@@ -8,6 +8,7 @@ import type {
 	SignalRepository,
 	SocketConfig
 } from '../Types'
+import type { GroupFanoutRecordStore } from '../Utils/group-phash-resend'
 import type { ILogger } from '../Utils/logger'
 import type { KeyedMutex, Mutex } from '../Utils/make-mutex'
 import type { MessageRetryManager } from '../Utils/message-retry-manager'
@@ -88,5 +89,10 @@ export type SendCoreAdapter = {
 	 * Entries are always removed in `.finally()`, so the set is bounded by concurrency.
 	 */
 	inFlightTcTokenIssuance: Set<string>
+	/**
+	 * Group fan-outs awaiting a possible `<ack phash>` mismatch. Optional: a host that has its own
+	 * resend path (WA Web) leaves it unset and nothing is recorded.
+	 */
+	groupFanoutRecords?: GroupFanoutRecordStore
 	messageRetryManager: MessageRetryManager | null
 }
