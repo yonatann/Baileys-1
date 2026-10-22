@@ -164,6 +164,7 @@ export const parseAndInjectE2ESessions = async (
 			const signedKey = getBinaryNodeChild(node, 'skey')!
 			const key = getBinaryNodeChild(node, 'key')!
 			const identity = getBinaryNodeChildBuffer(node, 'identity')!
+			const deviceIdentity = getBinaryNodeChildBuffer(node, 'device-identity')
 			const jid = node.attrs.jid!
 
 			const registrationId = getBinaryNodeChildUInt(node, 'registration', 4)
@@ -174,7 +175,8 @@ export const parseAndInjectE2ESessions = async (
 					registrationId: registrationId!,
 					identityKey: generateSignalPubKey(identity),
 					signedPreKey: extractKey(signedKey)!,
-					preKey: extractKey(key)!
+					preKey: extractKey(key)!,
+					...(deviceIdentity ? { deviceIdentity } : {})
 				}
 			})
 		}

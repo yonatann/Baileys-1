@@ -48,6 +48,12 @@ type E2ESession = {
 	identityKey: Uint8Array
 	signedPreKey: SignedPreKey
 	preKey?: PreKey
+	/**
+	 * The `<device-identity>` child of the `encrypt` IQ answer (the signed ADV blob), present for companion
+	 * devices. libsignal ignores it; a host that verifies the ADV before creating a session (WA Web's
+	 * `createSignalSession` refuses a companion bundle without it) reads it from here.
+	 */
+	deviceIdentity?: Uint8Array
 }
 
 type E2ESessionOpts = {

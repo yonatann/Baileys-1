@@ -449,6 +449,7 @@ describe('wa-web adapter', () => {
 									{ tag: 'registration', attrs: {}, content: Buffer.from('00000101', 'hex') },
 									{ tag: 'type', attrs: {}, content: Buffer.from('05', 'hex') },
 									{ tag: 'identity', attrs: {}, content: Buffer.alloc(32, 0xaa) },
+									{ tag: 'device-identity', attrs: {}, content: Buffer.alloc(8, 0xee) },
 									{
 										tag: 'skey',
 										attrs: {},
@@ -500,7 +501,9 @@ describe('wa-web adapter', () => {
 						publicKey: Buffer.concat([Buffer.from([5]), Buffer.alloc(32, 0xbb)]),
 						signature: Buffer.alloc(64, 0xcc)
 					},
-					preKey: { keyId: 2, publicKey: Buffer.concat([Buffer.from([5]), Buffer.alloc(32, 0xdd)]) }
+					preKey: { keyId: 2, publicKey: Buffer.concat([Buffer.from([5]), Buffer.alloc(32, 0xdd)]) },
+					// companion device: WA Web refuses to create the session without the ADV blob
+					deviceIdentity: Buffer.alloc(8, 0xee)
 				}
 			]
 		])
