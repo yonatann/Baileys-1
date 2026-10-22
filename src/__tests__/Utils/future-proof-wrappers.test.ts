@@ -1,7 +1,7 @@
 import { describe, expect, it } from '@jest/globals'
 import type { proto } from '../../../WAProto/index.js'
-import { FUTURE_PROOF_WRAPPERS, getFutureProofMessage, normalizeMessageContent } from '../../Utils/message-content'
 import * as barrel from '../../Utils/index'
+import { FUTURE_PROOF_WRAPPERS, getFutureProofMessage, normalizeMessageContent } from '../../Utils/message-content'
 
 describe('FUTURE_PROOF_WRAPPERS', () => {
 	it('is exported from the Utils barrel (and so the package root)', () => {
