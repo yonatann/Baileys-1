@@ -16,7 +16,7 @@ export const normalizeMessageContent = (content: WAMessageContent | null | undef
 	}
 
 	// set max iterations to prevent an infinite loop
-	for (let i = 0; i < 5; i++) {
+	for (let i = 0; i < MAX_UNWRAP_DEPTH; i++) {
 		const inner = getFutureProofMessage(content)
 		if (!inner) {
 			break
@@ -26,18 +26,21 @@ export const normalizeMessageContent = (content: WAMessageContent | null | undef
 	}
 
 	return content!
-
-	function getFutureProofMessage(message: typeof content) {
-		return (
-			message?.ephemeralMessage ||
-			message?.viewOnceMessage ||
-			message?.documentWithCaptionMessage ||
-			message?.viewOnceMessageV2 ||
-			message?.viewOnceMessageV2Extension ||
-			message?.editedMessage ||
-			message?.associatedChildMessage ||
-			message?.groupStatusMessage ||
-			message?.groupStatusMessageV2
-		)
-	}
 }
+
+const MAX_UNWRAP_DEPTH = 5
+
+/** the wrapper (ephemeral, view once, ...) of `message`, when it is one; `normalizeMessageContent` peels these */
+export const getFutureProofMessage = (message: WAMessageContent | null | undefined) =>
+	message?.ephemeralMessage ||
+	message?.viewOnceMessage ||
+	message?.documentWithCaptionMessage ||
+	message?.viewOnceMessageV2 ||
+	message?.viewOnceMessageV2Extension ||
+	message?.editedMessage ||
+	message?.associatedChildMessage ||
+	message?.groupStatusMessage ||
+	message?.groupStatusMessageV2
+
+/** the unwrap depth bound shared with `normalizeMessageContent` */
+export const UNWRAP_DEPTH = MAX_UNWRAP_DEPTH

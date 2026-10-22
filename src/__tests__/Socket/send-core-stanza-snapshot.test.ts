@@ -453,6 +453,40 @@ const CASES: Case[] = [
 				{ tag: 'biz', attrs: {}, content: [{ tag: 'interactive', attrs: { type: 'native_flow', v: '1' } }] }
 			]
 		}
+	},
+	{
+		name: 'poll-vote-1to1-pn',
+		jid: OTHER_PN,
+		message: {
+			pollUpdateMessage: {
+				pollCreationMessageKey: { remoteJid: OTHER_PN, fromMe: false, id: 'POLL0001' },
+				vote: { encPayload: Buffer.alloc(16, 4), encIv: Buffer.alloc(12, 5) },
+				senderTimestampMs: 1700000000000
+			}
+		},
+		options: { messageId: 'SNAP0014' }
+	},
+	{
+		name: 'view-once-image-1to1-pn',
+		jid: OTHER_PN,
+		message: {
+			viewOnceMessage: {
+				message: {
+					imageMessage: {
+						url: 'https://mmg.whatsapp.net/d/f/snapshot.enc',
+						mimetype: 'image/jpeg',
+						fileSha256: Buffer.alloc(32, 1),
+						fileLength: 1234,
+						mediaKey: Buffer.alloc(32, 2),
+						fileEncSha256: Buffer.alloc(32, 3),
+						directPath: '/v/t62.7118-24/snapshot.enc',
+						mediaKeyTimestamp: 1700000000,
+						viewOnce: true
+					}
+				}
+			}
+		},
+		options: { messageId: 'SNAP0015' }
 	}
 ]
 
