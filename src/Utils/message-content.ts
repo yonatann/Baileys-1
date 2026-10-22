@@ -30,17 +30,38 @@ export const normalizeMessageContent = (content: WAMessageContent | null | undef
 
 const MAX_UNWRAP_DEPTH = 5
 
+/**
+ * The wrapper fields `normalizeMessageContent` peels, in priority order. The one list: both
+ * `getFutureProofMessage` and consumers that must stay in step with Baileys (a parity test, say)
+ * read it, instead of parsing this file's compiled source.
+ */
+export const FUTURE_PROOF_WRAPPERS = [
+	'ephemeralMessage',
+	'viewOnceMessage',
+	'documentWithCaptionMessage',
+	'viewOnceMessageV2',
+	'viewOnceMessageV2Extension',
+	'editedMessage',
+	'associatedChildMessage',
+	'groupStatusMessage',
+	'groupStatusMessageV2'
+] as const satisfies readonly (keyof WAMessageContent)[]
+
 /** the wrapper (ephemeral, view once, ...) of `message`, when it is one; `normalizeMessageContent` peels these */
-export const getFutureProofMessage = (message: WAMessageContent | null | undefined) =>
-	message?.ephemeralMessage ||
-	message?.viewOnceMessage ||
-	message?.documentWithCaptionMessage ||
-	message?.viewOnceMessageV2 ||
-	message?.viewOnceMessageV2Extension ||
-	message?.editedMessage ||
-	message?.associatedChildMessage ||
-	message?.groupStatusMessage ||
-	message?.groupStatusMessageV2
+export const getFutureProofMessage = (message: WAMessageContent | null | undefined) => {
+	if (!message) {
+		return undefined
+	}
+
+	for (const wrapper of FUTURE_PROOF_WRAPPERS) {
+		const inner = message[wrapper]
+		if (inner) {
+			return inner
+		}
+	}
+
+	return undefined
+}
 
 /** the unwrap depth bound shared with `normalizeMessageContent` */
 export const UNWRAP_DEPTH = MAX_UNWRAP_DEPTH
