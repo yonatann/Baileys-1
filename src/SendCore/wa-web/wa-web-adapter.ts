@@ -39,7 +39,9 @@ export const makeJidToWid =
 			throw new Boom(`not a jid: ${jid}`, { statusCode: 400 })
 		}
 
-		const server = BAILEYS_TO_WA_WEB_SERVER[decoded.server] ?? decoded.server
+		// the c.us spelling is for USER jids only: the bare server jid (`@s.whatsapp.net`, the `to` of
+		// every IQ) stays as it is
+		const server = decoded.user ? (BAILEYS_TO_WA_WEB_SERVER[decoded.server] ?? decoded.server) : decoded.server
 		return makeWid(`${decoded.user}${decoded.device ? `:${decoded.device}` : ''}@${server}`)
 	}
 

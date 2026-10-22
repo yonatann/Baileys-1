@@ -305,6 +305,106 @@ describe('wa-web adapter', () => {
 		expect(acks).toEqual([['SNAP0001', { ack: true }]])
 	})
 
+	it('fetches a missing session through WA Web as an encrypt IQ to the bare server jid', async () => {
+		const { modules, sent, iqs } = makeStubModules()
+		const fresh = `${OTHER_PN_USER}:3@c.us`
+		const created: [string, unknown][] = []
+		modules.signal.hasSignalSessions = async wids => wids.map(wid => wid.toString() !== fresh)
+		modules.signal.createSignalSession = async (wid, bundle) => {
+			created.push([wid.toString(), bundle])
+		}
+
+		// what WA Web's socket hands back for `get encrypt`, as a WapNode (jid attrs are Wids there too)
+		modules.sendIq = async stanza => {
+			iqs.push(stanza)
+			const user = makeWid(`${OTHER_LID_USER}:3@lid`)
+			return {
+				tag: 'iq',
+				attrs: { type: 'result', from: makeWid('@s.whatsapp.net') },
+				content: [
+					{
+						tag: 'list',
+						attrs: {},
+						content: [
+							{
+								tag: 'user',
+								attrs: { jid: user },
+								content: [
+									{ tag: 'registration', attrs: {}, content: Buffer.from('00000101', 'hex') },
+									{ tag: 'type', attrs: {}, content: Buffer.from('05', 'hex') },
+									{ tag: 'identity', attrs: {}, content: Buffer.alloc(32, 0xaa) },
+									{
+										tag: 'skey',
+										attrs: {},
+										content: [
+											{ tag: 'id', attrs: {}, content: Buffer.from('000001', 'hex') },
+											{ tag: 'value', attrs: {}, content: Buffer.alloc(32, 0xbb) },
+											{ tag: 'signature', attrs: {}, content: Buffer.alloc(64, 0xcc) }
+										]
+									},
+									{
+										tag: 'key',
+										attrs: {},
+										content: [
+											{ tag: 'id', attrs: {}, content: Buffer.from('000002', 'hex') },
+											{ tag: 'value', attrs: {}, content: Buffer.alloc(32, 0xdd) }
+										]
+									}
+								]
+							}
+						]
+					}
+				]
+			}
+		}
+
+		const adapter = makeWaWebAdapter({ modules, logger: logger.child({}, { level: 'silent' }) })
+		await buildAndRelay(adapter, OTHER_PN, text('first contact'), { messageId: 'SNAP0001' })
+
+		expect(iqs).toHaveLength(1)
+		const iq = iqs[0]!
+		expect(iq.tag).toBe('iq')
+		expect(iq.attrs.xmlns).toBe('encrypt')
+		expect(iq.attrs.type).toBe('get')
+		// the server jid keeps its spelling: `@c.us` is not an address WA Web routes to
+		expect((iq.attrs.to as WaWid).toString()).toBe('@s.whatsapp.net')
+		const users = (iq.content as WaWapNode[])[0]!.content as WaWapNode[]
+		// the core asks for the LID spelling of a PN device when a mapping is known
+		expect(users.map(u => (u.attrs.jid as WaWid).toString())).toEqual([`${OTHER_LID_USER}:3@lid`])
+
+		// the answer came back through readWapNode -> toBinaryNode and landed as a WA Web session
+		expect(created).toEqual([
+			[
+				`${OTHER_LID_USER}:3@lid`,
+				{
+					registrationId: 257,
+					identityKey: Buffer.concat([Buffer.from([5]), Buffer.alloc(32, 0xaa)]),
+					signedPreKey: {
+						keyId: 1,
+						publicKey: Buffer.concat([Buffer.from([5]), Buffer.alloc(32, 0xbb)]),
+						signature: Buffer.alloc(64, 0xcc)
+					},
+					preKey: { keyId: 2, publicKey: Buffer.concat([Buffer.from([5]), Buffer.alloc(32, 0xdd)]) }
+				}
+			]
+		])
+		expect(sent).toHaveLength(1)
+	})
+
+	it('carries peer_recipient_pn (the gate diff) as a c.us Wid', async () => {
+		const { modules, sent } = makeStubModules()
+		const adapter = makeWaWebAdapter({ modules, logger: logger.child({}, { level: 'silent' }) })
+		await buildAndRelay(adapter, OTHER_LID, text('to a lid chat'), {
+			messageId: 'SNAP0002',
+			additionalAttributes: { peer_recipient_pn: OTHER_PN }
+		})
+
+		const stanza = sent[0]!
+		expect((stanza.attrs.to as WaWid).toString()).toBe(OTHER_LID)
+		expect(isWid(stanza.attrs.peer_recipient_pn)).toBe(true)
+		expect((stanza.attrs.peer_recipient_pn as WaWid).toString()).toBe(`${OTHER_PN_USER}@c.us`)
+	})
+
 	it('refuses group sends until sender keys are wired', async () => {
 		const { modules, sent } = makeStubModules()
 		const adapter = makeWaWebAdapter({ modules, logger: logger.child({}, { level: 'silent' }) })
