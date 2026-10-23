@@ -14,9 +14,7 @@ describe('revoke edit attribute parity with WA Web', () => {
 	})
 
 	it("someone else's group message is an admin revoke", () => {
-		expect(revokeEditAttribute({ remoteJid: group, fromMe: false, id, participant: '100000000000003@lid' })).toBe(
-			'8'
-		)
+		expect(revokeEditAttribute({ remoteJid: group, fromMe: false, id, participant: '100000000000003@lid' })).toBe('8')
 	})
 
 	it('a channel revoke is edit=8', () => {

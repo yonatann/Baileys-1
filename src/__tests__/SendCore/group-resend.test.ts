@@ -1,5 +1,5 @@
-import { describe, expect, it, jest } from '@jest/globals'
 import NodeCache from '@cacheable/node-cache'
+import { describe, expect, it, jest } from '@jest/globals'
 import type { proto } from '../../../WAProto/index.js'
 import type { GroupResendAdapter } from '../../SendCore/group-resend'
 import type { GroupMetadata, SignalKeyStoreWithTransaction } from '../../Types'
@@ -390,6 +390,7 @@ describe('resendGroupMsgToMissingDevices (WAWebResendGroupMsg parity)', () => {
 		failedGroup.adapter.groupMetadata = async () => {
 			throw new Error('group query failed')
 		}
+
 		failedGroup.records.set(MSG_ID, record())
 		await expect(
 			resendGroupMsgToMissingDevices(failedGroup.adapter, {

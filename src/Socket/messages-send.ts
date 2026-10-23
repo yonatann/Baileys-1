@@ -4,7 +4,6 @@ import { proto } from '../../WAProto/index.js'
 import { DEFAULT_CACHE_TTLS, WA_DEFAULT_EPHEMERAL } from '../Defaults'
 import type { SendCoreAdapter } from '../SendCore'
 import * as sendCore from '../SendCore'
-import { GroupFanoutRecordStore } from '../Utils/group-phash-resend'
 import type {
 	AnyMessageContent,
 	MediaConnInfo,
@@ -34,6 +33,7 @@ import {
 	revokeEditAttribute,
 	unixTimestampSeconds
 } from '../Utils'
+import { GroupFanoutRecordStore } from '../Utils/group-phash-resend'
 import { getUrlInfo } from '../Utils/link-preview'
 import { makeKeyedMutex, makeMutex } from '../Utils/make-mutex'
 import { encryptMessageEdit } from '../Utils/message-edit-secret'
