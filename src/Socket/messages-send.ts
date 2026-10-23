@@ -31,6 +31,7 @@ import {
 	getWAUploadToServer,
 	isReactionRevoke,
 	MessageRetryManager,
+	revokeEditAttribute,
 	unixTimestampSeconds
 } from '../Utils'
 import { getUrlInfo } from '../Utils/link-preview'
@@ -480,12 +481,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				const additionalNodes: BinaryNode[] = []
 				// required for delete
 				if (isDeleteMsg) {
-					// if the chat is a group, and I am not the author, then delete the message as an admin
-					if (isJidGroup(content.delete?.remoteJid as string) && !content.delete?.fromMe) {
-						additionalAttributes.edit = '8'
-					} else {
-						additionalAttributes.edit = '7'
-					}
+					additionalAttributes.edit = revokeEditAttribute(content.delete)
 				} else if (isEditMsg) {
 					additionalAttributes.edit = '1'
 				} else if (isPinMsg) {
