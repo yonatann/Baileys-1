@@ -176,6 +176,62 @@ export const extractImageThumb = async (bufferOrFilePath: Readable | Buffer | st
 	}
 }
 
+/** WAWebMediaConstants.IMG_THUMB_MAX_EDGE: longest edge of a chat image's inline jpegThumbnail. */
+export const IMG_THUMB_MAX_EDGE = 100
+/** WAWebCanvasUtils.getResizedDataUrl's byte budget for that thumbnail. */
+export const IMG_THUMB_MAX_BYTES = 20000
+/** Chrome's default canvas JPEG quality, which getResizedDataUrl's first toDataURL uses. */
+const IMG_THUMB_JPEG_QUALITY = 92
+
+/** The slice of a jimp image extractChatImageThumb uses. */
+type JimpThumbSource = {
+	width: number
+	height: number
+	resize(opts: { w: number; h: number; mode: unknown }): JimpThumbSource
+	getBuffer(mime: 'image/jpeg', opts: { quality: number }): Promise<Buffer>
+}
+
+/**
+ * The inline jpegThumbnail WA Web builds for a chat image (WAWebMediaDataUtils): the image, EXIF-rotated and
+ * scaled down (never up) to a longest edge of IMG_THUMB_MAX_EDGE (WAWebImageUtils.rotateAndResize /
+ * WAWebImageGeometry.boundHeightWidth), as JPEG at q92; over IMG_THUMB_MAX_BYTES, quality steps 0.9 → 0.1
+ * (WAWebCanvasUtils.getResizedDataUrl). `original` is the source size, as extractImageThumb reports it.
+ */
+export const extractChatImageThumb = async (filePath: string) => {
+	const lib = await getImageProcessingLibrary()
+	if ('sharp' in lib && typeof lib.sharp?.default === 'function') {
+		const sharp = lib.sharp.default
+		const dimensions = await sharp(filePath).metadata()
+		const thumb = sharp(filePath)
+			.rotate()
+			.resize(IMG_THUMB_MAX_EDGE, IMG_THUMB_MAX_EDGE, { fit: 'inside', withoutEnlargement: true })
+		let buffer = await thumb.clone().jpeg({ quality: IMG_THUMB_JPEG_QUALITY }).toBuffer()
+		for (let quality = 90; buffer.length > IMG_THUMB_MAX_BYTES && quality >= 10; quality -= 10) {
+			buffer = await thumb.clone().jpeg({ quality }).toBuffer()
+		}
+
+		return { buffer, original: { width: dimensions.width, height: dimensions.height } }
+	} else if ('jimp' in lib && typeof lib.jimp?.Jimp === 'function') {
+		// jimp v1's Jimp is a class (extractImageThumb's `=== 'object'` check never matches it)
+		const jimp = await (lib.jimp.Jimp as unknown as { read(path: string): Promise<JimpThumbSource> }).read(filePath)
+		const original = { width: jimp.width, height: jimp.height }
+		const scale = Math.min(1, IMG_THUMB_MAX_EDGE / Math.max(original.width, original.height))
+		const resized = jimp.resize({
+			w: Math.max(1, Math.round(original.width * scale)),
+			h: Math.max(1, Math.round(original.height * scale)),
+			mode: lib.jimp.ResizeStrategy.BILINEAR
+		})
+		let buffer = await resized.getBuffer('image/jpeg', { quality: IMG_THUMB_JPEG_QUALITY })
+		for (let quality = 90; buffer.length > IMG_THUMB_MAX_BYTES && quality >= 10; quality -= 10) {
+			buffer = await resized.getBuffer('image/jpeg', { quality })
+		}
+
+		return { buffer, original }
+	} else {
+		throw new Boom('No image processing library available')
+	}
+}
+
 export const encodeBase64EncodedStringForUpload = (b64: string) =>
 	encodeURIComponent(b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/\=+$/, ''))
 
@@ -341,7 +397,7 @@ export async function generateThumbnail(
 	let thumbnail: string | undefined
 	let originalImageDimensions: { width: number; height: number } | undefined
 	if (mediaType === 'image') {
-		const { buffer, original } = await extractImageThumb(file)
+		const { buffer, original } = await extractChatImageThumb(file)
 		thumbnail = buffer.toString('base64')
 		if (original.width && original.height) {
 			originalImageDimensions = {
