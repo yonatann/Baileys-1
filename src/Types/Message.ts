@@ -177,6 +177,17 @@ type RequestPhoneNumber = {
 	requestPhoneNumber: boolean
 }
 
+/**
+ * The full-size document preview WA Web uploads next to a document (480px longest edge for a PDF's first page).
+ * It is encrypted under the document's own mediaKey as `thumbnail-document` and referenced by
+ * thumbnailDirectPath / thumbnailSha256 / thumbnailEncSha256 / thumbnailWidth / thumbnailHeight.
+ */
+export type DocumentHQThumbnail = {
+	jpeg: Buffer
+	width: number
+	height: number
+}
+
 export type AnyMediaMessageContent = (
 	| ({
 			image: WAMediaUpload
@@ -211,6 +222,10 @@ export type AnyMediaMessageContent = (
 			mimetype: string
 			fileName?: string
 			caption?: string
+			/** inline preview; WA Web sends a micro JPEG (<= 1300 bytes) here and the real preview as `hqThumbnail` */
+			jpegThumbnail?: string | Uint8Array
+			pageCount?: number
+			hqThumbnail?: DocumentHQThumbnail
 	  } & Contextable)
 ) & { mimetype?: string } & Editable & {
 		/** key of the parent albumMessage to associate this media with */
