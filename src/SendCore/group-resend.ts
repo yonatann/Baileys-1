@@ -2,8 +2,8 @@ import type { proto } from '../../WAProto/index.js'
 import {
 	classifyPhashMismatch,
 	computeResendDelta,
-	isResendExpired,
 	type GroupFanoutRecord,
+	isResendExpired,
 	selectPhashFanoutJids
 } from '../Utils/group-phash-resend'
 import {
