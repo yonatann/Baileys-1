@@ -14,6 +14,7 @@ import {
 import type {
 	AnyMediaMessageContent,
 	AnyMessageContent,
+	DocumentHQThumbnail,
 	DownloadableMessage,
 	MessageContentGenerationOptions,
 	MessageGenerationOptions,
@@ -60,7 +61,9 @@ type MediaUploadData = {
 	seconds?: number
 	gifPlayback?: boolean
 	fileName?: string
-	jpegThumbnail?: string
+	jpegThumbnail?: string | Uint8Array
+	pageCount?: number
+	hqThumbnail?: DocumentHQThumbnail
 	mimetype?: string
 	width?: number
 	height?: number
@@ -75,6 +78,54 @@ const MIMETYPE_MAP: { [T in MediaType]?: string } = {
 	audio: 'audio/ogg; codecs=opus',
 	sticker: 'image/webp',
 	'product-catalog-image': 'image/jpeg'
+}
+
+/** The proto fields that point a document at its uploaded HQ preview. */
+export type DocumentHQThumbnailFields = {
+	thumbnailDirectPath: string
+	thumbnailSha256: Buffer
+	thumbnailEncSha256: Buffer
+	thumbnailWidth: number
+	thumbnailHeight: number
+}
+
+/**
+ * Uploads a document's HQ preview the way WA Web does (WAWebMediaPrep → WAWebMediaUploadMmsThumbnail):
+ * encrypted under the DOCUMENT's mediaKey with the `thumbnail-document` keys ("WhatsApp Document Thumbnail
+ * Keys"), uploaded to /mms/thumbnail-document. The receiver decrypts it with the documentMessage's mediaKey.
+ *
+ * Best-effort: the preview is cosmetic, so a failure returns undefined and the document goes out with its
+ * inline jpegThumbnail only (WA Web would fail the whole send instead).
+ */
+export const uploadDocumentHQThumbnail = async (
+	thumbnail: DocumentHQThumbnail,
+	mediaKey: Uint8Array,
+	options: Pick<MessageContentGenerationOptions, 'upload' | 'logger' | 'mediaUploadTimeoutMs'>
+): Promise<DocumentHQThumbnailFields | undefined> => {
+	let encFilePath: string | undefined
+	try {
+		const enc = await encryptedStream(thumbnail.jpeg, 'thumbnail-document', { logger: options.logger, mediaKey })
+		encFilePath = enc.encFilePath
+		const { directPath } = await options.upload(enc.encFilePath, {
+			fileEncSha256B64: enc.fileEncSha256.toString('base64'),
+			mediaType: 'thumbnail-document',
+			timeoutMs: options.mediaUploadTimeoutMs
+		})
+		return {
+			thumbnailDirectPath: directPath,
+			thumbnailSha256: enc.fileSha256,
+			thumbnailEncSha256: enc.fileEncSha256,
+			thumbnailWidth: thumbnail.width,
+			thumbnailHeight: thumbnail.height
+		}
+	} catch (error) {
+		options.logger?.warn({ trace: (error as Error)?.stack }, 'failed to upload document HQ thumbnail')
+		return undefined
+	} finally {
+		if (encFilePath) {
+			await fs.unlink(encFilePath).catch(() => {})
+		}
+	}
 }
 
 const MessageTypeProto = {
@@ -146,6 +197,9 @@ export const prepareWAMessageMedia = async (
 		media: (message as any)[mediaType]
 	}
 	delete (uploadData as any)[mediaType]
+	// not a proto field: pulled out before any `...uploadData` spread below
+	const hqThumbnail = mediaType === 'document' ? uploadData.hqThumbnail : undefined
+	delete uploadData.hqThumbnail
 	// check if cacheable + generate cache key
 	const cacheableKey =
 		typeof uploadData.media === 'object' &&
@@ -244,7 +298,7 @@ export const prepareWAMessageMedia = async (
 	)
 
 	const fileEncSha256B64 = fileEncSha256.toString('base64')
-	const [{ mediaUrl, directPath }] = await Promise.all([
+	const [{ mediaUrl, directPath }, hqThumbnailFields] = await Promise.all([
 		(async () => {
 			const result = await options.upload(encFilePath, {
 				fileEncSha256B64,
@@ -254,6 +308,7 @@ export const prepareWAMessageMedia = async (
 			logger?.debug({ mediaType, cacheableKey }, 'uploaded media')
 			return result
 		})(),
+		hqThumbnail ? uploadDocumentHQThumbnail(hqThumbnail, mediaKey, options) : Promise.resolve(undefined),
 		(async () => {
 			try {
 				if (requiresThumbnailComputation) {
@@ -313,6 +368,7 @@ export const prepareWAMessageMedia = async (
 			fileLength,
 			mediaKeyTimestamp: unixTimestampSeconds(),
 			...uploadData,
+			...hqThumbnailFields,
 			media: undefined
 		} as any)
 	})

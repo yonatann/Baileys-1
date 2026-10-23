@@ -104,6 +104,8 @@ export const MEDIA_PATH_MAP: { [T in MediaType]?: string } = {
 	audio: '/mms/audio',
 	sticker: '/mms/image',
 	'thumbnail-link': '/mms/image',
+	// the HQ document preview (WA Web WAWebMmsClientFormatHashUrl: "thumbnail-document":"/mms/thumbnail-document")
+	'thumbnail-document': '/mms/thumbnail-document',
 	'product-catalog-image': '/product/image',
 	'md-app-state': '',
 	'md-msg-hist': '/mms/md-app-state',
