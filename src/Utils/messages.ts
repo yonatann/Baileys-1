@@ -817,6 +817,23 @@ export const generateWAMessage = async (jid: string, content: AnyMessageContent,
 export const isReactionRevoke = (message: proto.IMessage | null | undefined) =>
 	normalizeMessageContent(message)?.reactionMessage?.text === ''
 
+/**
+ * The `edit` attr of a delete-for-everyone. WA Web WAWebChatSendMessages.sendRevokeMsgs picks
+ * Revoke.Sender (edit=7, WASmaxOutMessagePublishRevokeMixin) when
+ * WAWebMsgActionCapability.canSenderRevokeMsg (own message) holds, else Revoke.Admin (edit=8,
+ * WASmaxOutMessagePublishAdminRevokeMixin), which canAdminRevokeMsg only allows on someone
+ * else's message in a group. Someone else's message in any other chat cannot be revoked.
+ * A channel revoke is always edit=8 (WASmaxOutMessagePublishNewsletterRevokeMixin);
+ * newsletter-stanza builds it and drops this attr.
+ */
+export const revokeEditAttribute = (key: proto.IMessageKey): '7' | '8' => {
+	const remoteJid = key.remoteJid ?? undefined
+	if (isJidNewsletter(remoteJid)) return '8'
+	if (key.fromMe) return '7'
+	if (isJidGroup(remoteJid)) return '8'
+	throw new Boom('Only the sender can delete this message for everyone', { statusCode: 400 })
+}
+
 export const getContentType = (content: proto.IMessage | undefined) => {
 	if (content) {
 		const keys = Object.keys(content)
