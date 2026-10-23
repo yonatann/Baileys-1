@@ -1,5 +1,5 @@
 import { Boom } from '@hapi/boom'
-import { exec } from 'child_process'
+import { execFile } from 'child_process'
 import * as Crypto from 'crypto'
 import { once } from 'events'
 import { createReadStream, createWriteStream, promises as fs, WriteStream } from 'fs'
@@ -121,21 +121,24 @@ export async function getMediaKeys(
 }
 
 /** Extracts video thumb using FFMPEG */
-const extractVideoThumb = async (
-	path: string,
-	destPath: string,
-	time: string,
-	size: { width: number; height: number }
-) =>
+/** Bound on the ffmpeg frame grab: a send must not hang on a broken video. */
+const VIDEO_FRAME_TIMEOUT_MS = 15_000
+
+/** The first frame of a video as PNG, full size (ffmpeg applies the display rotation). Args are passed without a shell. */
+const extractVideoFrame = async (path: string, destPath: string) =>
 	new Promise<void>((resolve, reject) => {
-		const cmd = `ffmpeg -ss ${time} -i ${path} -y -vf scale=${size.width}:-1 -vframes 1 -f image2 ${destPath}`
-		exec(cmd, err => {
-			if (err) {
-				reject(err)
-			} else {
-				resolve()
+		execFile(
+			'ffmpeg',
+			['-ss', '00:00:00', '-i', path, '-y', '-frames:v', '1', '-f', 'image2', '-c:v', 'png', destPath],
+			{ timeout: VIDEO_FRAME_TIMEOUT_MS },
+			err => {
+				if (err) {
+					reject(err)
+				} else {
+					resolve()
+				}
 			}
-		})
+		)
 	})
 
 export const extractImageThumb = async (bufferOrFilePath: Readable | Buffer | string, width = 32) => {
@@ -406,15 +409,17 @@ export async function generateThumbnail(
 			}
 		}
 	} else if (mediaType === 'video') {
-		const imgFilename = join(getTmpFilesDirectory(), generateMessageIDV2() + '.jpg')
+		// WA Web (WAWebMediaDataUtils.processRawAudioVideo): the first frame, thumbnailed like a chat image
+		// (longest edge IMG_THUMB_MAX_EDGE). No ffmpeg / a bad video → no thumbnail, the send still goes out.
+		const frameFilename = join(getTmpFilesDirectory(), generateMessageIDV2() + '.png')
 		try {
-			await extractVideoThumb(file, imgFilename, '00:00:00', { width: 32, height: 32 })
-			const buff = await fs.readFile(imgFilename)
-			thumbnail = buff.toString('base64')
-
-			await fs.unlink(imgFilename)
+			await extractVideoFrame(file, frameFilename)
+			const { buffer } = await extractChatImageThumb(frameFilename)
+			thumbnail = buffer.toString('base64')
 		} catch (err) {
 			options.logger?.debug('could not generate video thumb: ' + err)
+		} finally {
+			await fs.unlink(frameFilename).catch(() => {})
 		}
 	}
 
